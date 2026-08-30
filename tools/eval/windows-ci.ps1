@@ -55,7 +55,8 @@ Add-Result "llama_build" "llama.cpp b10688" $haveLlama $llamaLib $(if ($haveLlam
 # --- configure + build LensTrans ---
 $build = Join-Path $Root "build"
 cmake -S $Root -B $build -G $Gen -A x64
-if ($LASTEXITCODE -ne 0) { throw "LensTrans cmake configure failed generator=$Gen" }$targets = @(
+if ($LASTEXITCODE -ne 0) { throw "LensTrans cmake configure failed generator=$Gen" }
+$targets = @(
   "lenstrans_test",
   "lenstrans_test_hotkey",
   "lenstrans_overlay",
