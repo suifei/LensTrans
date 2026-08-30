@@ -133,6 +133,7 @@ static int RunQualitySuite(lenstrans::IEngine* eng, const char* outp, const char
   if (f) {
     f << "\n- engine_hard_fail_rows: " << engine_fail << "\n"
       << "- max_ws_mib: " << max_ws << "\n"
+      << "- ws_le_550: " << (max_ws <= 550.0 ? "yes" : "no") << "\n"
       << "- this is Goal test evidence, not W1 acceptance.\n";
   }
   std::printf("%s wrote %s engine_hard_fail=%d max_ws=%.1f\n", title, outp, engine_fail, max_ws);

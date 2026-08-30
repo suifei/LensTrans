@@ -43,3 +43,33 @@ jobs:
         run: |
           export PATH="/usr/bin:/bin:/opt/swift/usr/bin:$PATH"
           python3 tools/eval/goal-verify.py
+
+  windows-native-gate:
+    runs-on: windows-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache llama.cpp build
+        uses: actions/cache@v4
+        with:
+          path: third_party/llama.cpp
+          key: llama-b10688-${{ runner.os }}-v1
+
+      - name: Cache GGUF
+        uses: actions/cache@v4
+        with:
+          path: models/qwen2.5-0.5b-instruct-q4_k_m.gguf
+          key: gguf-qwen25-05b-q4km-74a4da8c
+
+      - name: Windows CI (build, test, pack, gguf, WS)
+        shell: pwsh
+        run: powershell -File tools/eval/windows-ci.ps1 -WithGguf
+
+      - name: Upload eval artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-eval-out
+          path: tools/eval/out/
+          if-no-files-found: warn
