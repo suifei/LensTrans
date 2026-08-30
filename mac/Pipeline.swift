@@ -143,18 +143,29 @@ final class OverlayWatchSession {
 
 @MainActor
 enum MacPaths {
+    /// Bundle Resources (offline .app) or Application Support / repo models/.
     static func resolveModelPath() -> String {
         let store = SettingsStore.shared
         if !store.modelPath.isEmpty, FileManager.default.fileExists(atPath: store.modelPath) {
             return store.modelPath
         }
         let name = ModelMetaLogic.fileName
-        let cands = [
+        var cands: [String] = [
             store.modelsDir.appendingPathComponent(name).path,
+        ]
+        if let res = Bundle.main.resourcePath {
+            cands.append(res + "/models/" + name)
+        }
+        // .app/Contents/MacOS/LensTrans → ../Resources/models
+        if let exe = Bundle.main.executableURL?.deletingLastPathComponent() {
+            cands.append(exe.deletingLastPathComponent().appendingPathComponent("Resources/models/\(name)").path)
+        }
+        cands.append(contentsOf: [
             FileManager.default.currentDirectoryPath + "/models/" + name,
+            repoRootCandidate() + "/models/" + name,
             NSHomeDirectory() + "/works/LensTrans/lenstrans/models/" + name,
             NSHomeDirectory() + "/works/LensTrans/models/" + name,
-        ]
+        ])
         for p in cands where FileManager.default.fileExists(atPath: p) {
             return p
         }
@@ -163,13 +174,22 @@ enum MacPaths {
 
     nonisolated static func findLlamaCli() -> String? {
         // Prefer llama-completion (non-interactive). Newer Homebrew llama-cli is chat-only.
+        // Order: Homebrew/PATH and third_party before relocated Resources/bin (brew copies break).
         let names = ["llama-completion", "llama-cli"]
-        let dirs = [
+        var dirs = [
             "/opt/homebrew/bin",
             "/usr/local/bin",
             FileManager.default.currentDirectoryPath + "/third_party/llama.cpp/build/bin",
+            repoRootCandidate() + "/third_party/llama.cpp/build/bin",
             NSHomeDirectory() + "/works/LensTrans/lenstrans/third_party/llama.cpp/build/bin",
         ]
+        if let res = Bundle.main.resourcePath {
+            dirs.append(res + "/bin")
+        }
+        if let exe = Bundle.main.executableURL?.deletingLastPathComponent() {
+            dirs.append(
+                exe.deletingLastPathComponent().appendingPathComponent("Resources/bin").path)
+        }
         for dir in dirs {
             for name in names {
                 let p = dir + "/" + name
@@ -193,5 +213,26 @@ enum MacPaths {
             } catch {}
         }
         return nil
+    }
+
+    /// Best-effort repo root (cwd, or walk up from executable).
+    nonisolated static func repoRootCandidate() -> String {
+        var dir = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        for _ in 0..<6 {
+            if FileManager.default.fileExists(atPath: dir.appendingPathComponent("mac/Package.swift").path) {
+                return dir.path
+            }
+            dir = dir.deletingLastPathComponent()
+        }
+        if let exe = Bundle.main.executableURL {
+            var d = exe.deletingLastPathComponent()
+            for _ in 0..<8 {
+                if FileManager.default.fileExists(atPath: d.appendingPathComponent("mac/Package.swift").path) {
+                    return d.path
+                }
+                d = d.deletingLastPathComponent()
+            }
+        }
+        return FileManager.default.currentDirectoryPath
     }
 }

@@ -6,11 +6,13 @@ import AppKit
 struct LensTransMacApp {
     static func main() {
         let app = NSApplication.shared
-        let e2e = MacE2e.parse(Array(CommandLine.arguments.dropFirst()))
+        let argv = Array(CommandLine.arguments.dropFirst())
+        let e2e = MacE2e.parse(argv)
+        let noOnboard = e2e.noOnboard || argv.contains("--no-onboard")
         if e2e.enabled {
             app.setActivationPolicy(.regular)
             Task { @MainActor in
-                if e2e.noOnboard || FirstRun.needsOnboarding {
+                if noOnboard || FirstRun.needsOnboarding {
                     SettingsStore.shared.downloadModel = false
                     SettingsStore.shared.save()
                 }
@@ -38,9 +40,14 @@ struct LensTransMacApp {
         TrayController.shared.onToggleBoxes = { OverlayBoxStore.shared.toggleAllVisible() }
         TrayController.shared.onPause = { OverlayBoxStore.shared.pauseAll() }
 
-        if FirstRun.needsOnboarding {
+        if FirstRun.needsOnboarding && !noOnboard {
             OnboardingWindow.present()
         } else {
+            if noOnboard && FirstRun.needsOnboarding {
+                // Persist defaults so subsequent launches skip the wizard.
+                SettingsStore.shared.downloadModel = false
+                SettingsStore.shared.save()
+            }
             _ = OverlayBoxStore.shared.createBox()
         }
         app.run()
