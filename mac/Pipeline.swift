@@ -162,29 +162,36 @@ enum MacPaths {
     }
 
     nonisolated static func findLlamaCli() -> String? {
-        let cands = [
-            "/opt/homebrew/bin/llama-cli",
-            "/usr/local/bin/llama-cli",
-            FileManager.default.currentDirectoryPath + "/third_party/llama.cpp/build/bin/llama-cli",
-            NSHomeDirectory() + "/works/LensTrans/lenstrans/third_party/llama.cpp/build/bin/llama-cli",
+        // Prefer llama-completion (non-interactive). Newer Homebrew llama-cli is chat-only.
+        let names = ["llama-completion", "llama-cli"]
+        let dirs = [
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            FileManager.default.currentDirectoryPath + "/third_party/llama.cpp/build/bin",
+            NSHomeDirectory() + "/works/LensTrans/lenstrans/third_party/llama.cpp/build/bin",
         ]
-        for p in cands where FileManager.default.isExecutableFile(atPath: p) {
-            return p
+        for dir in dirs {
+            for name in names {
+                let p = dir + "/" + name
+                if FileManager.default.isExecutableFile(atPath: p) { return p }
+            }
         }
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/which")
-        proc.arguments = ["llama-cli"]
-        let out = Pipe()
-        proc.standardOutput = out
-        proc.standardError = Pipe()
-        do {
-            try proc.run()
-            proc.waitUntilExit()
-            let data = out.fileHandleForReading.readDataToEndOfFile()
-            let path = String(data: data, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if !path.isEmpty, FileManager.default.isExecutableFile(atPath: path) { return path }
-        } catch {}
+        for name in names {
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/usr/bin/which")
+            proc.arguments = [name]
+            let out = Pipe()
+            proc.standardOutput = out
+            proc.standardError = Pipe()
+            do {
+                try proc.run()
+                proc.waitUntilExit()
+                let data = out.fileHandleForReading.readDataToEndOfFile()
+                let path = String(data: data, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if !path.isEmpty, FileManager.default.isExecutableFile(atPath: path) { return path }
+            } catch {}
+        }
         return nil
     }
 }

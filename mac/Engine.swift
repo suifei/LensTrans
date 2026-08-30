@@ -70,7 +70,7 @@ final class MacLocalEngine: MacEngine {
             return r
         }
         guard let cli = cliPath else {
-            r.error = "llama-cli not found (install Homebrew llama.cpp or link Metal in-process)"
+            r.error = "llama-completion/llama-cli not found (brew install llama.cpp or link Metal)"
             return r
         }
         let prompt = LocalPromptLogic.buildTranslatePrompt(
@@ -94,10 +94,11 @@ final class MacLocalEngine: MacEngine {
         try prompt.write(to: tmp, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: tmp) }
 
+        let isCompletion = (cli as NSString).lastPathComponent.contains("completion")
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: cli)
-        // Match win CliEngine flags; --no-display-prompt avoids echoing the prompt into stdout.
-        proc.arguments = [
+        // Prefer llama-completion + ChatML + -no-cnv (new Homebrew llama-cli is chat-only).
+        var args = [
             "-m", model,
             "-f", tmp.path,
             "-n", "96",
@@ -107,8 +108,12 @@ final class MacLocalEngine: MacEngine {
             "--temp", "0",
             "-no-cnv",
             "--no-display-prompt",
-            "--log-disable",
         ]
+        if !isCompletion {
+            // Older one-shot llama-cli may need explicit log disable.
+            args.append("--log-disable")
+        }
+        proc.arguments = args
         let outPipe = Pipe()
         let errPipe = Pipe()
         proc.standardOutput = outPipe
@@ -126,7 +131,7 @@ final class MacLocalEngine: MacEngine {
         if wait == .timedOut {
             proc.terminate()
             throw NSError(domain: "LensTrans", code: 3,
-                          userInfo: [NSLocalizedDescriptionKey: "llama-cli timeout"])
+                          userInfo: [NSLocalizedDescriptionKey: "llama-completion timeout"])
         }
         proc.waitUntilExit()
         return String(data: stdout, encoding: .utf8) ?? ""

@@ -109,23 +109,32 @@ public enum ModelMetaLogic {
 
 public enum LocalPromptLogic {
     public static func buildTranslatePrompt(text: String, tgtLang: String) -> String {
+        let user: String
         if tgtLang == "zh" || tgtLang == "zh-CN" {
-            return "英译简体中文。习语按含义意译，勿逐字直译。输出完整且简洁的译文，不要解释。\n\n" + text
+            user = "英译简体中文。习语按含义意译，勿逐字直译。输出完整且简洁的译文，不要解释。\n\n" + text
+        } else {
+            let name: String
+            switch tgtLang {
+            case "en": name = "English"
+            case "ja": name = "Japanese"
+            case "ko": name = "Korean"
+            default: name = tgtLang
+            }
+            user = "Translate the following segment into \(name), without additional explanation.\n\n" + text
         }
-        let name: String
-        switch tgtLang {
-        case "en": name = "English"
-        case "ja": name = "Japanese"
-        case "ko": name = "Korean"
-        default: name = tgtLang
-        }
-        return "Translate the following segment into \(name), without additional explanation.\n\n" + text
+        // ChatML wrap — matches core WrapQwenChat; works with llama-completion -no-cnv.
+        return "<|im_start|>system\nYou translate text accurately and concisely. Idioms: translate by "
+            + "meaning, not literally. Output only the translation; no explanation."
+            + "<|im_end|>\n<|im_start|>user\n" + user + "<|im_end|>\n<|im_start|>assistant\n"
     }
 
     public static func stripThink(_ raw: String) -> String {
         var s = raw
         if let a = s.range(of: "<think>"), let b = s.range(of: "</think>"), a.lowerBound < b.upperBound {
             s.removeSubrange(a.lowerBound..<b.upperBound)
+        }
+        for marker in ["[end of text]", "[end of text]\n", "<|im_end|>"] {
+            if let r = s.range(of: marker) { s.removeSubrange(r) }
         }
         return s.trimmingCharacters(in: CharacterSet(charactersIn: " \n\t\""))
     }

@@ -19,12 +19,13 @@ LOG="$OUT/mac-smoke-$STAMP.txt"
   echo "binary=$BIN"
   test -x "$BIN"
   ls -la "$BIN"
-  echo "--- llama-cli ---"
-  if command -v llama-cli >/dev/null 2>&1; then
-    echo "llama-cli=$(command -v llama-cli)"
-    llama-cli --version 2>&1 | head -3 || true
+  echo "--- llama-cli / llama-completion ---"
+  if command -v llama-completion >/dev/null 2>&1; then
+    echo "llama-completion=$(command -v llama-completion)"
+  elif command -v llama-cli >/dev/null 2>&1; then
+    echo "llama-cli=$(command -v llama-cli) (prefer llama-completion on Homebrew b9290+)"
   else
-    echo "llama-cli=MISSING (local engine will report not found until installed)"
+    echo "llama=MISSING (local engine will report not found until installed)"
   fi
   echo "--- model ---"
   NAME=qwen2.5-0.5b-instruct-q4_k_m.gguf
@@ -38,6 +39,22 @@ LOG="$OUT/mac-smoke-$STAMP.txt"
   if [[ -n "$FOUND" ]]; then
     echo "gguf=$FOUND"
     ls -la "$FOUND"
+    if command -v llama-completion >/dev/null 2>&1; then
+      echo "--- local-cli-smoke ---"
+      PROMPT=$(mktemp)
+      printf '%s' '<|im_start|>system
+You translate text accurately and concisely. Output only the translation; no explanation.<|im_end|>
+<|im_start|>user
+英译简体中文。
+
+hello<|im_end|>
+<|im_start|>assistant
+' > "$PROMPT"
+      RAW=$(llama-completion -m "$FOUND" -f "$PROMPT" -n 24 -c 512 --temp 0 -ngl 99 -no-cnv --no-display-prompt 2>/dev/null || true)
+      rm -f "$PROMPT"
+      echo "cli_out=$RAW"
+      echo "$RAW" | grep -qiE '你好|您好|哈喽|hello' && echo "cli_translate=PASS" || echo "cli_translate=CHECK"
+    fi
   else
     echo "gguf=MISSING (download via onboarding or models/README.md)"
   fi

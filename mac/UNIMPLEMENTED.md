@@ -19,7 +19,7 @@ bash ../tools/eval/mac-smoke.sh
 | `Capture.swift` | WGC + crop | ScreenCaptureKit（需屏幕录制权限） |
 | `Ocr.swift` | Windows.Media.OCR | Vision → MacOcrBlock |
 | `Present.swift` | `present.hpp` | 决策 + AA + 绘制；纯逻辑见 `Logic/` |
-| `Engine.swift` | `engine_local` / `engine_cloud` | 云端 URLSession；本地 **llama-cli** 回退（Metal 进程内未链） |
+| `Engine.swift` | `engine_local` / `engine_cloud` | 云端 URLSession；本地优先 **llama-completion**（Homebrew），回退 llama-cli；Metal 进程内未链 |
 | `Tray.swift` | `Shell_NotifyIcon` | 完整菜单树 |
 | `Settings.swift` | 设置 5 Tab | NSTabView；密钥 Keychain |
 | `Onboarding.swift` | 640×420 三步引导 | **禁止为探测启动 SCStream**；可后台下 GGUF |
@@ -35,7 +35,7 @@ bash ../tools/eval/mac-smoke.sh
 | ScreenCaptureKit | 已实现；首次抓屏需用户授权 | WGC |
 | Vision OCR → OcrBlock | 已实现 | Windows.Media.OCR |
 | llama.cpp + Metal 进程内 | **未链**（SPM 无 Xcode Metal target） | 进程内 llama.cpp |
-| llama-cli 本地回退 | **已接**（Homebrew / PATH / third_party） | Win CliEngine |
+| llama-cli 本地回退 | **已接**（优先 `llama-completion`，PATH / Homebrew / third_party） | Win CliEngine |
 | 云端 OpenAI 兼容 | URLSession 已接 | WinHTTP + DPAPI |
 | 托盘 / 设置 / 引导 / 热键 / 多框 | 已接 | 对等 |
 | 沉浸替换 / 贴条 | Present + Pipeline 已接 | 框内填充+贴条 |
