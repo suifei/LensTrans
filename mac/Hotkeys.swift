@@ -59,7 +59,7 @@ final class HotkeyCenter {
         guard status == noErr else { return }
         for c in combos {
             var ref: EventHotKeyRef?
-            var hotKeyID = EventHotKeyID(signature: OSType(0x4C545348), id: UInt32(c.id)) // 'LTSH'
+            let hotKeyID = EventHotKeyID(signature: OSType(0x4C545348), id: UInt32(c.id)) // 'LTSH'
             RegisterEventHotKey(c.key, c.modifiers, hotKeyID, GetApplicationEventTarget(), 0, &ref)
             hotKeyRefs.append(ref)
         }

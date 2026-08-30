@@ -136,6 +136,7 @@ enum MacModelDownload {
         "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf",
     ]
 
+    @MainActor
     static func destURL() -> URL {
         if !SettingsStore.shared.modelPath.isEmpty {
             return URL(fileURLWithPath: SettingsStore.shared.modelPath)
@@ -143,6 +144,7 @@ enum MacModelDownload {
         return SettingsStore.shared.modelsDir.appendingPathComponent(fileName)
     }
 
+    @MainActor
     static func startInBackground() {
         let dest = destURL()
         DispatchQueue.global(qos: .utility).async {

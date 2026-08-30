@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>com.lenstrans.app</string>
+	<key>CFBundleName</key>
+	<string>LensTrans</string>
+	<key>CFBundleDisplayName</key>
+	<string>LensTrans</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.2</string>
+	<key>CFBundleVersion</key>
+	<string>0.2.0</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>LensTrans 需要屏幕录制权限，以便捕获翻译框内的画面做 OCR 与翻译。像素默认不离开本机。</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>LensTrans 仅在用户启用相关功能时使用系统事件。</string>
+</dict>
+</plist>

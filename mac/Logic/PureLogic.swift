@@ -106,3 +106,27 @@ public enum ModelMetaLogic {
         hex.lowercased() == ggufSha256
     }
 }
+
+public enum LocalPromptLogic {
+    public static func buildTranslatePrompt(text: String, tgtLang: String) -> String {
+        if tgtLang == "zh" || tgtLang == "zh-CN" {
+            return "英译简体中文。习语按含义意译，勿逐字直译。输出完整且简洁的译文，不要解释。\n\n" + text
+        }
+        let name: String
+        switch tgtLang {
+        case "en": name = "English"
+        case "ja": name = "Japanese"
+        case "ko": name = "Korean"
+        default: name = tgtLang
+        }
+        return "Translate the following segment into \(name), without additional explanation.\n\n" + text
+    }
+
+    public static func stripThink(_ raw: String) -> String {
+        var s = raw
+        if let a = s.range(of: "<think>"), let b = s.range(of: "</think>"), a.lowerBound < b.upperBound {
+            s.removeSubrange(a.lowerBound..<b.upperBound)
+        }
+        return s.trimmingCharacters(in: CharacterSet(charactersIn: " \n\t\""))
+    }
+}

@@ -39,7 +39,9 @@ final class OverlayCapture {
         // Capture full display; crop in grab() to overlay rect (physical points).
         let stream = SCStream(filter: filter, configuration: cfg, delegate: nil)
         let output = FrameSink { [weak self] sample in
-            self?.ingest(sample, crop: region, display: display)
+            Task { @MainActor in
+                self?.ingest(sample, crop: region, display: display)
+            }
         }
         try stream.addStreamOutput(output, type: .screen, sampleHandlerQueue: .global(qos: .userInitiated))
         try await stream.startCapture()

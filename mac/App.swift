@@ -32,6 +32,7 @@ struct LensTransMacApp {
     }
 }
 
+@MainActor
 enum FirstRun {
     static var needsOnboarding: Bool { SettingsStore.shared.fileMissing }
 }

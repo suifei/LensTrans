@@ -25,6 +25,7 @@ let package = Package(
                 "UNIMPLEMENTED.md",
                 "Package.swift",
                 "README.md",
+                "Info.plist",
                 ".build",
             ],
             sources: [
@@ -35,6 +36,7 @@ let package = Package(
                 "Ocr.swift",
                 "Onboarding.swift",
                 "OverlayPanel.swift",
+                "Pipeline.swift",
                 "Present.swift",
                 "Secrets.swift",
                 "Settings.swift",

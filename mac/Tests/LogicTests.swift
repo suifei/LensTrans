@@ -55,4 +55,12 @@ final class LogicTests: XCTestCase {
         XCTAssertFalse(ModelMetaLogic.sha256Matches("deadbeef"))
         XCTAssertEqual(ModelMetaLogic.idleUnloadMs, 10 * 60 * 1000)
     }
+
+    func testLocalPromptAndStrip() {
+        let p = LocalPromptLogic.buildTranslatePrompt(text: "hello", tgtLang: "zh")
+        XCTAssertTrue(p.contains("英译简体中文"))
+        XCTAssertTrue(p.contains("hello"))
+        XCTAssertEqual(LocalPromptLogic.stripThink("  \"hi\"\n"), "hi")
+        XCTAssertEqual(LocalPromptLogic.stripThink("a<think>x</think>b"), "ab")
+    }
 }

@@ -36,23 +36,27 @@ extension MacEngine {
 
 final class MacLocalEngine: MacEngine {
     private let modelPath: String
+    private let cliPath: String?
     private var lastActivity = Date()
-    /// Metal / llama.cpp process-in wiring lands with Xcode + third_party/llama.cpp Metal build.
-    /// Until linked, Ready is false unless a CLI helper is present next to the app.
+    /// Process-in Metal (LENSTRANS_WITH_LLAMA) is not linked in SPM yet.
+    /// Runtime path: spawn llama-cli (Homebrew / PATH / third_party) — parity with Windows CliEngine.
     private var loaded = false
 
     var ready: Bool {
-        FileManager.default.fileExists(atPath: modelPath)
+        FileManager.default.fileExists(atPath: modelPath) && cliPath != nil
     }
 
-    init(modelPath: String) { self.modelPath = modelPath }
+    init(modelPath: String, cliPath: String? = nil) {
+        self.modelPath = modelPath
+        self.cliPath = cliPath ?? MacPaths.findLlamaCli()
+    }
 
     func noteActivity() { lastActivity = Date() }
 
     func unload() { loaded = false }
 
     func maybeIdleUnload(idleMs: Int64) {
-        let limit = idleMs > 0 ? idleMs : Int64(10 * 60 * 1000)
+        let limit = idleMs > 0 ? idleMs : ModelMetaLogic.idleUnloadMs
         if Date().timeIntervalSince(lastActivity) * 1000 >= Double(limit) {
             unload()
         }
@@ -61,13 +65,71 @@ final class MacLocalEngine: MacEngine {
     func translate(_ req: MacTranslateRequest) -> MacTranslateResult {
         noteActivity()
         var r = MacTranslateResult()
-        guard ready else {
+        guard FileManager.default.fileExists(atPath: modelPath) else {
             r.error = "local model missing"
             return r
         }
-        // Process-in Metal path not linked in this tree (no Xcode target yet).
-        r.error = "llama.cpp Metal not linked — build with Xcode + LENSTRANS_WITH_LLAMA Metal"
+        guard let cli = cliPath else {
+            r.error = "llama-cli not found (install Homebrew llama.cpp or link Metal in-process)"
+            return r
+        }
+        let prompt = LocalPromptLogic.buildTranslatePrompt(
+            text: req.text, tgtLang: req.tgtLang)
+        let t0 = Date()
+        do {
+            let out = try Self.runCli(cli: cli, model: modelPath, prompt: prompt)
+            r.text = LocalPromptLogic.stripThink(out)
+            r.latencyMs = Int(Date().timeIntervalSince(t0) * 1000)
+            if r.text.isEmpty { r.error = "empty local output" }
+        } catch {
+            r.error = error.localizedDescription
+            r.latencyMs = Int(Date().timeIntervalSince(t0) * 1000)
+        }
         return r
+    }
+
+    private static func runCli(cli: String, model: String, prompt: String) throws -> String {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lenstrans-prompt-\(UUID().uuidString).txt")
+        try prompt.write(to: tmp, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: cli)
+        // Match win CliEngine flags; --no-display-prompt avoids echoing the prompt into stdout.
+        proc.arguments = [
+            "-m", model,
+            "-f", tmp.path,
+            "-n", "96",
+            "-c", "1024",
+            "--batch-size", "512",
+            "-ngl", "99",
+            "--temp", "0",
+            "-no-cnv",
+            "--no-display-prompt",
+            "--log-disable",
+        ]
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        proc.standardOutput = outPipe
+        proc.standardError = errPipe
+        try proc.run()
+
+        let group = DispatchGroup()
+        var stdout = Data()
+        group.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            stdout = outPipe.fileHandleForReading.readDataToEndOfFile()
+            group.leave()
+        }
+        let wait = group.wait(timeout: .now() + 45)
+        if wait == .timedOut {
+            proc.terminate()
+            throw NSError(domain: "LensTrans", code: 3,
+                          userInfo: [NSLocalizedDescriptionKey: "llama-cli timeout"])
+        }
+        proc.waitUntilExit()
+        return String(data: stdout, encoding: .utf8) ?? ""
     }
 }
 

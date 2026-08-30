@@ -17,6 +17,7 @@ final class OverlayPanel: NSPanel {
     var boxId: String = UUID().uuidString
     private var borderView: NSView?
     private(set) var presentLayer = CALayer()
+    private var watchSession: OverlayWatchSession?
 
     convenience init(contentRect: NSRect) {
         self.init(
@@ -53,6 +54,7 @@ final class OverlayPanel: NSPanel {
     }
 
     func enterEditing() {
+        watchSession?.stop()
         mode = .editing
         ignoresMouseEvents = false
         borderView?.isHidden = false
@@ -64,14 +66,18 @@ final class OverlayPanel: NSPanel {
         mode = .watching
         ignoresMouseEvents = true  // click-through — parity with WS_EX_TRANSPARENT
         borderView?.isHidden = true
+        if watchSession == nil { watchSession = OverlayWatchSession(panel: self) }
+        watchSession?.start()
     }
 
     func enterPaused() {
+        watchSession?.stop()
         mode = .paused
         ignoresMouseEvents = true
     }
 
     func enterHidden() {
+        watchSession?.stop()
         mode = .hidden
         orderOut(nil)
     }
@@ -121,6 +127,9 @@ final class OverlayBoxStore {
     }
 
     func pauseAll() {
-        for p in panels { p.enterPaused() }
+        let anyPaused = panels.contains { $0.mode == .paused }
+        for p in panels {
+            if anyPaused { p.enterWatching() } else { p.enterPaused() }
+        }
     }
 }

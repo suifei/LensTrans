@@ -2,35 +2,36 @@
 
 ## 项目目录
 
-推荐本机路径：
-
 ```bash
-mkdir -p ~/works
-# 已有 clone 时：
-cd ~/works/LensTrans
-# 或：
-git clone <repo-url> ~/works/LensTrans
-cd ~/works/LensTrans/mac
+cd ~/works/LensTrans/lenstrans/mac   # 或仓库 mac/
 ```
 
-Cloud Agent 同步副本：`/home/ubuntu/works/LensTrans`（与 `/workspace` 同内容）。
-
-## 本环境已跑通的验证（2026-08-30）
+## 本机已跑通（2026-08-31，Darwin arm64）
 
 | 检查 | 结果 | 命令/证据 |
 | --- | --- | --- |
-| mac 纯逻辑镜像 | PASS | `python3 tools/eval/mac-logic-verify.py` |
-| C++ `lenstrans_test` | PASS | Linux cmake build |
-| Swift `swift test` | 本机无 Swift/SDK | 需在 macOS 上 `cd mac && swift test` |
-| AppKit / ScreenCaptureKit / Vision e2e | 未跑 | 需 macOS 真机 |
+| `swift test`（LogicTests 8/8） | PASS | `mac/` + `tools/eval/out/mac-smoke-*.txt` |
+| `swift build -c release` | PASS | 产出 `mac/.build/release/LensTrans` |
+| `mac-logic-verify.py` | PASS | `python3 tools/eval/mac-logic-verify.py` |
+| `mac-smoke.sh` | PASS | `bash tools/eval/mac-smoke.sh` |
+| Capture→OCR→Engine→Present 代码管线 | 已接线 | `mac/Pipeline.swift`；本地引擎走 `llama-cli` |
+| 屏幕录制授权后人工 e2e | 待用户授权后签字 | 系统设置 → 隐私 → 屏幕录制 |
+| llama.cpp Metal 进程内 | 未链 | 见 `mac/UNIMPLEMENTED.md` |
+| 安装器 / 公证 | 未做 | 同上 |
 
-## macOS 上完整测试
+## 命令
 
 ```bash
-cd ~/works/LensTrans/mac
-swift test
-swift build -c release --product LensTrans
-# 运行后：托盘 LT → 引导三步（勿在步骤 2 启 SCStream）→ 拉框 → 授权屏幕录制
+cd mac && swift test && swift build -c release --product LensTrans
+bash tools/eval/mac-smoke.sh
+# 运行：
+./mac/.build/release/LensTrans
+# 托盘 LT → 引导（步骤 2 不启 SCStream）→ 新建框 → Ctrl+E 监视 → 授权屏幕录制
 ```
 
-未完成（见 `mac/UNIMPLEMENTED.md`）：llama.cpp Metal 链接、安装器、真机 Capture→OCR→Present 签字验收。
+本地翻译需要：
+
+1. GGUF：`~/Library/Application Support/LensTrans/models/qwen2.5-0.5b-instruct-q4_k_m.gguf`（引导下载或见 `models/README.md`）
+2. `llama-cli`（如 `brew install llama.cpp`）或日后 Metal 进程内链接
+
+不做 Electron / Tauri / Hunyuan。
