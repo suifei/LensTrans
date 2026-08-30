@@ -1,13 +1,6 @@
 # LensTrans
 
-[English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · **한국어**
-
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D4?logo=windows&logoColor=white)](#플랫폼)
-[![macOS](https://img.shields.io/badge/macOS-API%20stubs-lightgrey?logo=apple)](#플랫폼)
-[![C++](https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus)](CMakeLists.txt)
-[![UI](https://img.shields.io/badge/shell-Win32%20native-informational)](#무엇인가)
-[![Engine](https://img.shields.io/badge/local-Qwen2.5--0.5B%20GGUF-orange)](#기능)
+[中文](../../README.md) · [English](README.en.md) · [日本語](README.ja.md) · **한국어**
 
 **Windows 네이티브 실시간 화면 번역기.** 아무 창 위에 레이어드·클릭 통과 박스를 그립니다. Windows Graphics Capture(WGC)로 픽셀을 잡고, 시스템 OCR로 읽고, 로컬 Qwen2.5-0.5B 또는 직접 넣은 OpenAI 호환 엔드포인트로 번역한 뒤, 몰입 채우기나 스티커로 원문을 가립니다. Electron도 Tauri도 WebView 셸도 쓰지 않습니다.
 
@@ -70,12 +63,12 @@ Hidden → Editing → Watching ⇄ Translating
 
 환경: Windows 10 21H2+ 또는 Windows 11, x64, Visual Studio 2022, Windows 10/11 SDK.
 
-1. 이 저장소를 clone합니다. [빌드](#빌드)대로 llama.cpp **b10688**을 받고, [models/README.md](models/README.md)대로 GGUF를 둡니다.
+1. 이 저장소를 clone합니다. [빌드](#빌드)대로 llama.cpp **b10688**을 받고, [models/README.md](../../models/README.md)대로 GGUF를 둡니다.
 2. `lenstrans_overlay`를 빌드하고 `build\Release\lenstrans_overlay.exe`를 실행합니다.
 3. 화면 녹화 권한을 물으면 허용합니다. 영어 UI 위에 박스를 그립니다. `Ctrl+E`로 통과로 바꾼 뒤 아래 창을 클릭합니다.
 4. 클라우드를 쓸 때는 설정을 열고 **본인** Base URL, 모델 이름, Key만 넣습니다. 소스에 게이트웨이를 미리 넣지 않습니다.
 
-스크립트 zip(Inno / NSIS / 스토어 서명 패키지가 아님)은 [docs/installer.md](docs/installer.md). 이 트리에는 제품 서명 MSIX가 없습니다.
+스크립트 zip(Inno / NSIS / 스토어 서명 패키지가 아님)은 [docs/installer.md](../installer.md). 이 트리에는 제품 서명 MSIX가 없습니다.
 
 ## 빌드
 
@@ -92,7 +85,7 @@ cmake --build build --config Release --target lenstrans_test lenstrans_overlay
 git clone --depth 1 --branch b10688 https://github.com/ggml-org/llama.cpp.git third_party\llama.cpp
 ```
 
-llama.cpp를 **Release x64**로 빌드한 뒤 LensTrans를 다시 구성합니다. CMake는 `third_party/llama.cpp/build/src/Release/llama.lib`를 찾으면 `LENSTRANS_WITH_LLAMA=ON`을 켭니다. 핀 고정은 [third_party/README.md](third_party/README.md).
+llama.cpp를 **Release x64**로 빌드한 뒤 LensTrans를 다시 구성합니다. CMake는 `third_party/llama.cpp/build/src/Release/llama.lib`를 찾으면 `LENSTRANS_WITH_LLAMA=ON`을 켭니다. 핀 고정은 [third_party/README.md](../../third_party/README.md).
 
 ```
 tag:    b10688
@@ -112,7 +105,7 @@ Ninja + MSVC도 됩니다. vcpkg를 넣지 마세요. UI를 크로스 플랫폼 
 | `lenstrans_e2e_target` | overlay 스크립트용 독립 HWND(흰 바탕 `HELLO Settings`) |
 | `lenstrans_wgc_probe` | WGC 권한 + OCR 스모크 |
 
-`tools/eval/*.ps1`은 검증 스크립트이며, 보고서는 `tools/eval/out/`에 쓰고 gitignore되어 있습니다. 설명은 [tests/README.md](tests/README.md).
+`tools/eval/*.ps1`은 검증 스크립트이며, 보고서는 `tools/eval/out/`에 쓰고 gitignore되어 있습니다. 설명은 [tests/README.md](../../tests/README.md).
 
 ### 패키징
 
@@ -140,7 +133,7 @@ powershell -File tools\pack\install-windows.ps1
 
 로컬에서 스크립트 기본 트리는 약 **4.5 MB**(zip 약 1.8 MB), 오프라인 합계 약 **496 MB**로 상한 안이었습니다. 한 대에서 나온 산출물입니다. 툴체인이 바뀌면 숫자는 변하지만 예산은 변하지 않습니다.
 
-기본 가중치: `qwen2.5-0.5b-instruct-q4_k_m.gguf`, 491400032바이트, SHA256 `74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db`. 받는 절차는 [models/README.md](models/README.md). 고른 이유는 **Apache-2.0이 EU/UK/KR을 포함한 재배포를 허용하기 때문**이지, 0.5B가 전업 기계번역 품질에 도달해서가 아닙니다.
+기본 가중치: `qwen2.5-0.5b-instruct-q4_k_m.gguf`, 491400032바이트, SHA256 `74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db`. 받는 절차는 [models/README.md](../../models/README.md). 고른 이유는 **Apache-2.0이 EU/UK/KR을 포함한 재배포를 허용하기 때문**이지, 0.5B가 전업 기계번역 품질에 도달해서가 아닙니다.
 
 ## 개인정보
 
@@ -155,11 +148,11 @@ powershell -File tools\pack\install-windows.ps1
 | | 상태 |
 | --- | --- |
 | **Windows 10/11 x64** | C++20 + Win32. 이것이 제품입니다. |
-| **macOS** | `mac/`는 Swift AppKit **인터페이스 스텁**. [mac/UNIMPLEMENTED.md](mac/UNIMPLEMENTED.md)를 보세요. ScreenCaptureKit / Vision / Metal은 연결되지 않았습니다. 이 저장소에 Xcode 프로젝트는 없습니다. Windows를 먼저 끝냅니다. |
+| **macOS** | `mac/`는 Swift AppKit **인터페이스 스텁**. [mac/UNIMPLEMENTED.md](../../mac/UNIMPLEMENTED.md)를 보세요. ScreenCaptureKit / Vision / Metal은 연결되지 않았습니다. 이 저장소에 Xcode 프로젝트는 없습니다. Windows를 먼저 끝냅니다. |
 
 ## 제한 (먼저 읽기)
 
-- 기본 로컬 모델은 **0.5B**입니다. 짧은 UI 문장은 종종 쓸 만합니다. 긴 문장과 관용구는 직역이거나 어순이 뒤틀리기 쉽습니다. 용량 한계이지, 「프롬프트만 다듬으면 전업 MT가 된다」가 아닙니다. 정식 FLORES / COMET 평가는 아직 열려 있습니다.
+- 기본 로컬 모델은 **0.5B**입니다. 짧은 UI 문장은 종종 쓸 만합니다. 긴 문장과 관용구는 직역이거나 어순이 뒤틀리기 쉽습니다. 용량 한계이지, 「프롬프트만 다듬으면 전업 MT가 된다」가 아닙니다. 정식 FLORES / COMET 수락은 아직 열려 있습니다.
 - 이 저장소에는 제품/스토어 코드 서명이 없습니다. `tools/pack/pack-msix.ps1`의 test-sign은 로컬에만 둡니다. 인증서는 커밋하지 않습니다.
 - macOS는 배포본이 아닙니다.
 - Hunyuan / HY-MT 커뮤니티 라이선스는 EU/UK/KR을 제외합니다. **기본 엔진이 아니며** 설치 패키지에도 넣지 않습니다.
@@ -178,11 +171,11 @@ models/         GGUF를 둠(가중치는 저장소에 넣지 않음)
 third_party/    llama.cpp b10688을 직접 clone(트리는 저장소에 넣지 않음)
 ```
 
-모듈 표와 고정 제약: [docs/M0-poc-structure.md](docs/M0-poc-structure.md). 모델 라이선스와 평가 계획: [docs/M0-model-eval.md](docs/M0-model-eval.md).
+모듈 표와 고정 제약: [docs/M0-poc-structure.md](../M0-poc-structure.md). 모델 라이선스와 평가 계획: [docs/M0-model-eval.md](../M0-model-eval.md).
 
 ## 라이선스
 
-[MIT](LICENSE) © 2026 flynn (suifei).
+[MIT](../../LICENSE) © 2026 flynn (suifei).
 
 선택적 Qwen2.5-0.5B GGUF는 **Apache-2.0**(Alibaba Cloud)입니다. 가중치를 재배포할 때는 해당 라이선스를 함께 두세요. 대조 사본: `tools/eval/licenses/`. llama.cpp는 업스트림 라이선스를 따릅니다. 공식 저장소에서 clone하세요.
 
@@ -196,4 +189,4 @@ third_party/    llama.cpp b10688을 직접 clone(트리는 저장소에 넣지 �
 - 표시 경로에서 「원문이 아직 보이는데 반투명 번역이 겹친다」면 회귀입니다.
 - `core/`를 손댔으면 먼저 `lenstrans_test`를 통과시키세요.
 
-평가 도중에 llama.cpp 커밋을 올리지 마세요. 고정은 [third_party/README.md](third_party/README.md).
+평가 도중에 llama.cpp 커밋을 올리지 마세요. 고정은 [third_party/README.md](../../third_party/README.md).
