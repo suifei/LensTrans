@@ -404,10 +404,13 @@ int main() {
   CHECK(kLocalIdleUnloadMs == 10 * 60 * 1000);
 #ifndef _WIN32
   {
-    setenv("LENSTRANS_ROOT", "/workspace", 1);
-    const std::string root = DetectRepoRoot();
-    CHECK(FileExists(JoinPath(root, "CMakeLists.txt")));
-    unsetenv("LENSTRANS_ROOT");
+    // Do not hardcode /workspace — CI checkouts live under /home/runner/work/...
+    if (const char* prev = std::getenv("LENSTRANS_ROOT"); prev && *prev) {
+      CHECK(FileExists(JoinPath(prev, "CMakeLists.txt")));
+    } else {
+      const std::string root = DetectRepoRoot();
+      CHECK(FileExists(JoinPath(root, "CMakeLists.txt")) || FileExists("CMakeLists.txt"));
+    }
   }
 #endif
 

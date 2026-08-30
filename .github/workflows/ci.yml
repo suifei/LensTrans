@@ -50,14 +50,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v2
+      - name: Enable MSVC developer command prompt
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install Ninja
+        run: choco install ninja -y --no-progress
 
       - name: Cache llama.cpp build
         uses: actions/cache@v4
         with:
           path: third_party/llama.cpp
-          key: llama-b10688-windows-2022-v2
+          key: llama-b10688-win2022-ninja-v3
 
       - name: Cache GGUF
         uses: actions/cache@v4

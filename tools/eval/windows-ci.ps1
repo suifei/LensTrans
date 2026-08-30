@@ -20,42 +20,84 @@ function Add-Result($id, $name, $pass, $evidence, $detail) {
 Set-Location $Root
 $env:LENSTRANS_ROOT = $Root
 
-# --- cmake generator (VS 2022 / 2025) ---
-function Get-VsGenerator {
-  $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
-  if (Test-Path $vswhere) {
-    $ver = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationVersion
-    if ($ver -match '^18\.') { return "Visual Studio 18 2025" }
-    if ($ver -match '^17\.') { return "Visual Studio 17 2022" }
+# Prefer Ninja+MSVC when cl.exe is on PATH (GHA msvc-dev-cmd). Else VS generator.
+$UseNinja = $false
+if (Get-Command cl.exe -ErrorAction SilentlyContinue) {
+  if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) {
+    choco install ninja -y --no-progress
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
+                [System.Environment]::GetEnvironmentVariable("Path", "User")
   }
-  # Prefer 2022 label; cmake will error clearly if absent.
-  return "Visual Studio 17 2022"
+  if (Get-Command ninja -ErrorAction SilentlyContinue) { $UseNinja = $true }
 }
-$Gen = Get-VsGenerator
-Write-Host "CMake generator: $Gen"
+
+function Resolve-OutDir([string]$buildRoot) {
+  foreach ($c in @((Join-Path $buildRoot "Release"), $buildRoot)) {
+    if (Test-Path (Join-Path $c "lenstrans_test.exe")) { return $c }
+  }
+  return (Join-Path $buildRoot "Release")
+}
+
+function Find-LlamaLib([string]$llamaBuild) {
+  foreach ($c in @(
+      (Join-Path $llamaBuild "src\Release\llama.lib"),
+      (Join-Path $llamaBuild "src\llama.lib"),
+      (Join-Path $llamaBuild "Release\llama.lib")
+    )) {
+    if (Test-Path $c) { return $c }
+  }
+  return $null
+}
+
+Write-Host "UseNinja=$UseNinja cl=$(Get-Command cl.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source)"
 
 # --- llama.cpp b10688 ---
 $llamaSrc = Join-Path $Root "third_party\llama.cpp"
-$llamaLib = Join-Path $llamaSrc "build\src\Release\llama.lib"
+$llamaBuild = Join-Path $llamaSrc "build"
 if (-not $SkipLlamaBuild) {
   if (-not (Test-Path (Join-Path $llamaSrc "include\llama.h"))) {
     git clone --depth 1 --branch b10688 https://github.com/ggml-org/llama.cpp.git $llamaSrc
   }
-  if (-not (Test-Path $llamaLib)) {
-    cmake -S $llamaSrc -B (Join-Path $llamaSrc "build") -G $Gen -A x64 `
-      -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=OFF
-    if ($LASTEXITCODE -ne 0) { throw "llama cmake configure failed" }
-    cmake --build (Join-Path $llamaSrc "build") --config Release --target llama
+  if (-not (Find-LlamaLib $llamaBuild)) {
+    if ($UseNinja) {
+      cmake -S $llamaSrc -B $llamaBuild -G Ninja -DCMAKE_BUILD_TYPE=Release `
+        -DBUILD_SHARED_LIBS=ON -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=OFF
+      if ($LASTEXITCODE -ne 0) { throw "llama cmake configure failed (ninja)" }
+      cmake --build $llamaBuild --target llama
+    } else {
+      $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+      $Gen = "Visual Studio 17 2022"
+      if (Test-Path $vswhere) {
+        $ver = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationVersion
+        if ($ver -match '^18\.') { $Gen = "Visual Studio 18 2025" }
+      }
+      cmake -S $llamaSrc -B $llamaBuild -G $Gen -A x64 `
+        -DBUILD_SHARED_LIBS=ON -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=OFF
+      if ($LASTEXITCODE -ne 0) { throw "llama cmake configure failed ($Gen)" }
+      cmake --build $llamaBuild --config Release --target llama
+    }
     if ($LASTEXITCODE -ne 0) { throw "llama build failed" }
   }
 }
-$haveLlama = Test-Path $llamaLib
-Add-Result "llama_build" "llama.cpp b10688" $haveLlama $llamaLib $(if ($haveLlama) { "ok" } else { "missing llama.lib" })
+$llamaLib = Find-LlamaLib $llamaBuild
+$haveLlama = [bool]$llamaLib
+Add-Result "llama_build" "llama.cpp b10688" $haveLlama $(if ($llamaLib) { $llamaLib } else { $llamaBuild }) $(if ($haveLlama) { "ok" } else { "missing llama.lib" })
 
 # --- configure + build LensTrans ---
 $build = Join-Path $Root "build"
-cmake -S $Root -B $build -G $Gen -A x64
-if ($LASTEXITCODE -ne 0) { throw "LensTrans cmake configure failed generator=$Gen" }
+if ($UseNinja) {
+  cmake -S $Root -B $build -G Ninja -DCMAKE_BUILD_TYPE=Release
+} else {
+  $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+  $Gen = "Visual Studio 17 2022"
+  if (Test-Path $vswhere) {
+    $ver = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationVersion
+    if ($ver -match '^18\.') { $Gen = "Visual Studio 18 2025" }
+  }
+  cmake -S $Root -B $build -G $Gen -A x64
+}
+if ($LASTEXITCODE -ne 0) { throw "LensTrans cmake configure failed" }
+
 $targets = @(
   "lenstrans_test",
   "lenstrans_test_hotkey",
@@ -64,11 +106,18 @@ $targets = @(
   "lenstrans_e2e_target"
 )
 if ($haveLlama) { $targets += "lenstrans_test_llama" }
-$cmakeArgs = @("--build", $build, "--config", "Release")
-foreach ($t in $targets) { $cmakeArgs += @("--target", $t) }
-& cmake @cmakeArgs
-if ($LASTEXITCODE -ne 0) { throw "cmake build failed exit=$LASTEXITCODE" }
-$rel = Join-Path $build "Release"
+if ($UseNinja) {
+  foreach ($t in $targets) {
+    cmake --build $build --target $t
+    if ($LASTEXITCODE -ne 0) { throw "build $t failed" }
+  }
+} else {
+  $cmakeArgs = @("--build", $build, "--config", "Release")
+  foreach ($t in $targets) { $cmakeArgs += @("--target", $t) }
+  & cmake @cmakeArgs
+  if ($LASTEXITCODE -ne 0) { throw "cmake build failed exit=$LASTEXITCODE" }
+}
+$rel = Resolve-OutDir $build
 $testExe = Join-Path $rel "lenstrans_test.exe"
 $hkExe = Join-Path $rel "lenstrans_test_hotkey.exe"
 Add-Result "build" "Release targets" (Test-Path $testExe) $rel $(if (Test-Path $testExe) { "ok" } else { "missing test exe" })
@@ -89,12 +138,17 @@ if (Test-Path $hkExe) {
 
 # Ensure llama DLLs sit next to overlay for pack-windows.ps1
 if ($haveLlama) {
-  $dllSrc = Join-Path $llamaSrc "build\bin\Release"
+  $dllDirs = @(
+    (Join-Path $llamaBuild "bin\Release"),
+    (Join-Path $llamaBuild "bin"),
+    (Join-Path $llamaBuild "Release")
+  )
   foreach ($dll in @("llama.dll", "ggml.dll", "ggml-base.dll", "ggml-cpu.dll")) {
-    $src = Join-Path $dllSrc $dll
     $dst = Join-Path $rel $dll
-    if ((Test-Path $src) -and -not (Test-Path $dst)) {
-      Copy-Item $src $dst -Force
+    if (Test-Path $dst) { continue }
+    foreach ($dllSrc in $dllDirs) {
+      $src = Join-Path $dllSrc $dll
+      if (Test-Path $src) { Copy-Item $src $dst -Force; break }
     }
   }
 }
@@ -104,7 +158,7 @@ $pack = Join-Path $Root "tools\pack\pack-windows.ps1"
 $sizeMd = Join-Path $OutDir "installer-size.md"
 if ((Test-Path $pack) -and (Test-Path (Join-Path $rel "lenstrans_overlay.exe"))) {
   try {
-    & $pack
+    & $pack -BuildDir $rel
     $sm = if (Test-Path $sizeMd) { Get-Content $sizeMd -Raw } else { "" }
     $basePass = $sm -match "Limit 30 MB decimal:\s*\*\*PASS\*\*"
     Add-Result "base_pack" "base pack <=30MB" $basePass $sizeMd $(if ($basePass) { "PASS" } else { "FAIL/missing" })
@@ -135,7 +189,7 @@ if ($WithGguf) {
     $hashOk = $hash -eq "74A4DA8C9FDBCD15BD1F6D01D621410D31C6FC00986F5EB687824E7B93D7A9DB"
     Add-Result "gguf" "GGUF sha256/size" $hashOk $gguf "sha=$hash bytes=$((Get-Item $gguf).Length)"
     try {
-      & $pack -Offline
+      & $pack -BuildDir $rel -Offline
       $sm = if (Test-Path $sizeMd) { Get-Content $sizeMd -Raw } else { "" }
       $offPass = $sm -match "Limit 520 MB:\s*\*\*PASS\*\*"
       Add-Result "offline_pack" "offline pack <=520MB" $offPass $sizeMd $(if ($offPass) { "PASS" } else { "FAIL" })
