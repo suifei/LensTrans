@@ -1,0 +1,42 @@
+/build/
+/out/
+/.vs/
+/CMakeUserPresets.json
+*.user
+*.suo
+*.sdf
+*.VC.db
+CMakeCache.txt
+CMakeFiles/
+compile_commands.json
+
+# Weights and local caches (never ship GGUF in git)
+*.gguf
+/models/*.gguf
+/.cache/
+
+# llama.cpp is cloned/built locally; do not vendor the tree or its build
+/third_party/llama.cpp/
+
+/tools/eval/.venv/
+/tools/eval/out/
+
+*.pdb
+*.ilk
+*.obj
+*.log
+.DS_Store
+Thumbs.db
+
+# Secrets, certs, test-signing material
+settings.cfg
+.env
+*.pem
+*.key
+*.pfx
+*.cer
+dist/*.pfx
+dist/*.cer
+dist/*.msix
+dist/*.zip
+/dist/

@@ -1,0 +1,19 @@
+Apache License
+Version 2.0, January 2004
+http://www.apache.org/licenses/
+
+来源（2026-08-30 核对）：
+https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct/raw/main/LICENSE
+官方 GGUF 仓同名 LICENSE：https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF
+
+结论（产品用，非法务意见）：
+- SPDX: Apache-2.0
+- 允许商用、允许随闭源安装包再分发权重（须随附本协议副本；保留版权与 NOTICE 署名）
+- 无 EU / UK / KR 地域排除
+- 无 MAU / 营收门槛
+- 版权声明：Copyright 2024 Alibaba Cloud
+- 商标：不授予 Qwen / Alibaba 商标使用权，关于页可用合理来源说明
+- 选择本模型作为默认引擎，是因为上述再分发条件覆盖目标市场（含 EU/UK/KR），不是因为翻译质量已经测完
+
+完整协议正文见 https://www.apache.org/licenses/LICENSE-2.0
+官方附录版权行：Copyright 2024 Alibaba Cloud
