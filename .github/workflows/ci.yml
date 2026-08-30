@@ -45,16 +45,19 @@ jobs:
           python3 tools/eval/goal-verify.py
 
   windows-native-gate:
-    runs-on: windows-latest
+    runs-on: windows-2022
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
 
       - name: Cache llama.cpp build
         uses: actions/cache@v4
         with:
           path: third_party/llama.cpp
-          key: llama-b10688-${{ runner.os }}-v1
+          key: llama-b10688-windows-2022-v2
 
       - name: Cache GGUF
         uses: actions/cache@v4
