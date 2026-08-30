@@ -70,6 +70,18 @@ if (Test-Path $hkExe) {
   Add-Result "test_hotkey" "lenstrans_test_hotkey" $false $hkExe "missing"
 }
 
+# Ensure llama DLLs sit next to overlay for pack-windows.ps1
+if ($haveLlama) {
+  $dllSrc = Join-Path $llamaSrc "build\bin\Release"
+  foreach ($dll in @("llama.dll", "ggml.dll", "ggml-base.dll", "ggml-cpu.dll")) {
+    $src = Join-Path $dllSrc $dll
+    $dst = Join-Path $rel $dll
+    if ((Test-Path $src) -and -not (Test-Path $dst)) {
+      Copy-Item $src $dst -Force
+    }
+  }
+}
+
 # --- pack base / offline ---
 $pack = Join-Path $Root "tools\pack\pack-windows.ps1"
 $sizeMd = Join-Path $OutDir "installer-size.md"
