@@ -6,6 +6,7 @@
 
 #include "win/capture/capture.hpp"
 #include "win/ocr/winrt_ocr.hpp"
+#include "lenstrans/paths.hpp"
 
 #include <windows.h>
 
@@ -55,7 +56,8 @@ static lenstrans::win::BgraFrame MakeHelloFrame() {
 }
 
 int main() {
-  const char* outp = "D:\\works\\LensTrans\\tools\\eval\\out\\wgc-probe.md";
+  const std::string outp = lenstrans::JoinPath(lenstrans::EvalOutDir(), "wgc-probe.md");
+  lenstrans::EnsureDir(lenstrans::EvalOutDir());
   std::string status = "unknown";
   std::string detail;
   int w = 0, h = 0;
@@ -147,7 +149,7 @@ int main() {
   const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                       std::chrono::steady_clock::now() - t0)
                       .count();
-  std::ofstream f(outp, std::ios::binary);
+  std::ofstream f(outp.c_str(), std::ios::binary);
   if (f) {
     f << "# WGC probe + OCR fix\n\n"
       << "- date: 2026-08-30\n"

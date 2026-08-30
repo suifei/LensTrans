@@ -6,14 +6,18 @@
 
 #include "win/app/ui.hpp"
 #include "win/app/secrets.hpp"
+#include "win/app/model_download.hpp"
 #include "win/capture/capture.hpp"
+#include "lenstrans/paths.hpp"
 #include "lenstrans/present.hpp"
+#include "lenstrans/model_meta.hpp"
 
 #include <commctrl.h>
 #include <shellapi.h>
 
 #include <algorithm>
 #include <string>
+#include <thread>
 
 using lenstrans::EnginePref;
 using lenstrans::FindHotkeyConflict;
@@ -532,9 +536,10 @@ void PaintOnbStep(OnbUi* o) {
   } else {
     title = L"LensTrans 引导 3/3 — 本地引擎";
     body =
-        L"默认使用已下载的 Qwen2.5-0.5B Instruct Q4_K_M（约 491MB）。\n"
+        L"默认使用官方 Qwen2.5-0.5B Instruct Q4_K_M（约 491MB）。\n"
+        L"勾选后将按需下载（断点续传 + SHA256 校验）；已存在且校验通过则跳过。\n"
         L"云端 Base URL / API Key / Model 全部留空。\n\n"
-        L"勾选后本机加载模型；不勾选仍创建翻译框，但不加载模型。";
+        L"不勾选仍可创建翻译框（仅云端需自行配置）；下载失败不阻塞完成。";
     if (o->local) ShowWindow(o->local, SW_SHOW);
     EnableWindow(o->back, TRUE);
     SetWindowTextW(o->next, L"完成");
@@ -566,6 +571,15 @@ LRESULT CALLBACK OnbProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
           }
           SaveSettingsFile(ConfigDir() + "\\settings.cfg",
                            o->hooks && o->hooks->settings ? *o->hooks->settings : Settings{});
+          if (o->hooks && o->hooks->settings && o->hooks->settings->download_model) {
+            const std::string dest = lenstrans::FindDefaultModelPath();
+            std::string err;
+            // Background: do not block onboarding completion on network.
+            std::thread([dest]() {
+              std::string e;
+              DownloadDefaultGguf(dest, nullptr, e);
+            }).detach();
+          }
           o->done = true;
           o->ok = true;
           DestroyWindow(hwnd);

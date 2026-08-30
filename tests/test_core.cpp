@@ -7,6 +7,8 @@
 #include "lenstrans/dispatch.hpp"
 #include "lenstrans/engine.hpp"
 #include "lenstrans/frame_diff.hpp"
+#include "lenstrans/model_meta.hpp"
+#include "lenstrans/paths.hpp"
 #include "lenstrans/pipeline.hpp"
 #include "lenstrans/present.hpp"
 #include "lenstrans/router.hpp"
@@ -16,6 +18,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -392,6 +395,21 @@ int main() {
         "C:\\Program Files\\LensTrans\\app.exe");
   CHECK(RunValuePointsTo("\"C:\\a b\\app.exe\"", "C:\\a b\\app.exe"));
   CHECK(!RunValuePointsTo("C:\\other.exe", "C:\\a\\app.exe"));
+
+  CHECK(kDefaultGgufBytes == 491400032ull);
+  CHECK(IsDefaultGgufSha256(kDefaultGgufSha256));
+  CHECK(IsDefaultGgufSha256("74A4DA8C9FDBCD15BD1F6D01D621410D31C6FC00986F5EB687824E7B93D7A9DB"));
+  CHECK(!IsDefaultGgufSha256("deadbeef"));
+  CHECK(DefaultModelFileName() == kDefaultGgufFileName);
+  CHECK(kLocalIdleUnloadMs == 10 * 60 * 1000);
+#ifndef _WIN32
+  {
+    setenv("LENSTRANS_ROOT", "/workspace", 1);
+    const std::string root = DetectRepoRoot();
+    CHECK(FileExists(JoinPath(root, "CMakeLists.txt")));
+    unsetenv("LENSTRANS_ROOT");
+  }
+#endif
 
   if (g_fail) {
     std::fprintf(stderr, "%d checks failed\n", g_fail);

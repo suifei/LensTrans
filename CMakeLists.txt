@@ -83,10 +83,11 @@ if(WIN32)
     win/ocr/winrt_ocr.cpp
     win/app/secrets.cpp
     win/app/ui.cpp
+    win/app/model_download.cpp
   )
   target_include_directories(lenstrans_overlay PRIVATE "${CMAKE_SOURCE_DIR}")
   target_link_libraries(lenstrans_overlay PRIVATE
-    lenstrans_core user32 gdi32 comctl32 shell32 ole32 dwmapi d3d11 dxgi windowsapp)
+    lenstrans_core user32 gdi32 comctl32 shell32 ole32 dwmapi d3d11 dxgi windowsapp bcrypt)
   target_compile_definitions(lenstrans_overlay PRIVATE UNICODE _UNICODE NOMINMAX WINVER=0x0A00
                                                        _WIN32_WINNT=0x0A00 NTDDI_VERSION=0x0A000010)
   if(MSVC)

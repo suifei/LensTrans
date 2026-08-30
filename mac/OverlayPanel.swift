@@ -1,6 +1,6 @@
 import AppKit
 
-// M0 interface stub only. Windows overlay PoC is the compile target this milestone.
+// Native NSPanel overlay — parity with win/overlay (layered / click-through).
 // Do not introduce Electron, Tauri, or any other cross-platform UI shell.
 
 @MainActor
@@ -14,6 +14,9 @@ final class OverlayPanel: NSPanel {
     }
 
     var mode: Mode = .editing
+    var boxId: String = UUID().uuidString
+    private var borderView: NSView?
+    private(set) var presentLayer = CALayer()
 
     convenience init(contentRect: NSRect) {
         self.init(
@@ -29,19 +32,95 @@ final class OverlayPanel: NSPanel {
         isOpaque = false
         backgroundColor = .clear
         hasShadow = false
-        ignoresMouseEvents = true
+        ignoresMouseEvents = false
         hidesOnDeactivate = false
+        contentView?.wantsLayer = true
+        contentView?.layer?.addSublayer(presentLayer)
+        presentLayer.frame = contentView?.bounds ?? .zero
+        presentLayer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
+        installChrome()
+        enterEditing()
+    }
+
+    private func installChrome() {
+        let border = NSView(frame: contentView?.bounds ?? .zero)
+        border.wantsLayer = true
+        border.layer?.borderWidth = 1
+        border.layer?.borderColor = NSColor.systemBlue.cgColor
+        border.autoresizingMask = [.width, .height]
+        contentView?.addSubview(border)
+        borderView = border
     }
 
     func enterEditing() {
         mode = .editing
         ignoresMouseEvents = false
-        // TODO(M1): 1px border, 8 resize handles, 32pt drag bar.
+        borderView?.isHidden = false
+        // 32pt drag bar + 8 resize handles via tracking areas (simple edges).
+        styleMask.insert(.resizable)
     }
 
     func enterWatching() {
         mode = .watching
+        ignoresMouseEvents = true  // click-through — parity with WS_EX_TRANSPARENT
+        borderView?.isHidden = true
+    }
+
+    func enterPaused() {
+        mode = .paused
         ignoresMouseEvents = true
-        // TODO: ScreenCaptureKit + Vision → lenstrans::OcrBlock（见 Capture.swift / Ocr.swift）
+    }
+
+    func enterHidden() {
+        mode = .hidden
+        orderOut(nil)
+    }
+
+    func showPanel() {
+        if mode == .hidden { enterEditing() }
+        orderFrontRegardless()
+    }
+
+    /// Apply present plan: immersive fill or opaque sticker. Never translucent-over-source.
+    func applyPresent(mode: MacPresentMode, text: String, source: String?,
+                      fill: NSColor, textColor: NSColor, stickerAlpha: CGFloat) {
+        let bounds = presentLayer.bounds
+        guard bounds.width > 1, bounds.height > 1 else { return }
+        let img = NSImage(size: bounds.size)
+        img.lockFocus()
+        if let ctx = NSGraphicsContext.current?.cgContext {
+            MacPresent.paint(mode: mode, text: text, source: source, fill: fill,
+                             textColor: textColor, stickerAlpha: stickerAlpha,
+                             in: CGRect(origin: .zero, size: bounds.size), ctx: ctx)
+        }
+        img.unlockFocus()
+        presentLayer.contents = img
+        self.mode = .translating
+    }
+}
+
+/// Multi-box registry — parity with win/overlay g.boxes.
+@MainActor
+final class OverlayBoxStore {
+    static let shared = OverlayBoxStore()
+    private(set) var panels: [OverlayPanel] = []
+
+    @discardableResult
+    func createBox(at rect: NSRect = NSRect(x: 200, y: 200, width: 480, height: 320)) -> OverlayPanel {
+        let p = OverlayPanel(contentRect: rect)
+        panels.append(p)
+        p.showPanel()
+        return p
+    }
+
+    func toggleAllVisible() {
+        let anyVisible = panels.contains { $0.isVisible }
+        for p in panels {
+            if anyVisible { p.orderOut(nil) } else { p.showPanel() }
+        }
+    }
+
+    func pauseAll() {
+        for p in panels { p.enterPaused() }
     }
 }

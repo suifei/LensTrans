@@ -1,5 +1,6 @@
 #pragma once
 
+#include "lenstrans/model_meta.hpp"
 #include "lenstrans/present.hpp"
 #include "lenstrans/router.hpp"
 
@@ -43,7 +44,9 @@ struct Settings {
   int mod_settings = 2;
 };
 
-inline std::string DefaultModelFileName() { return "qwen2.5-0.5b-instruct-q4_k_m.gguf"; }
+inline std::string DefaultModelFileName() {
+  return kDefaultGgufFileName;
+}
 
 inline bool CloudConfigured(const Settings& s, const std::string& api_key) {
   return !s.cloud_base_url.empty() && !s.cloud_model.empty() && !api_key.empty();

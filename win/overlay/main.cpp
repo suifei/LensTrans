@@ -10,9 +10,12 @@
 #include "lenstrans/engine.hpp"
 #include "lenstrans/frame_diff.hpp"
 #include "lenstrans/geom.hpp"
+#include "lenstrans/model_meta.hpp"
+#include "lenstrans/paths.hpp"
 #include "lenstrans/pipeline.hpp"
 #include "lenstrans/present.hpp"
 #include "lenstrans/settings.hpp"
+#include "win/app/model_download.hpp"
 #include "win/app/secrets.hpp"
 #include "win/app/ui.hpp"
 #include "win/capture/capture.hpp"
@@ -619,26 +622,13 @@ void LogA(const std::string& s) {
 }
 
 std::string FindModel() {
-  if (!g.settings.model_path.empty()) return g.settings.model_path;
-  char exe[MAX_PATH]{};
-  GetModuleFileNameA(nullptr, exe, MAX_PATH);
-  std::string dir = exe;
-  const auto slash = dir.find_last_of("\\/");
-  if (slash != std::string::npos) dir.resize(slash);
-  const std::string name = lenstrans::DefaultModelFileName();
-  const std::string cands[] = {dir + "\\..\\..\\models\\" + name, dir + "\\..\\models\\" + name,
-                               std::string("D:\\works\\LensTrans\\models\\") + name,
-                               dir + "\\" + name};
-  for (const auto& p : cands) {
-    if (GetFileAttributesA(p.c_str()) != INVALID_FILE_ATTRIBUTES) return p;
-  }
-  return std::string("D:\\works\\LensTrans\\models\\") + name;
+  return lenstrans::FindDefaultModelPath(g.settings.model_path);
 }
 
-std::string FindCli() {
-  const char* p = "D:\\works\\LensTrans\\third_party\\llama.cpp\\build\\bin\\Release\\llama-cli.exe";
-  if (GetFileAttributesA(p) != INVALID_FILE_ATTRIBUTES) return p;
-  return {};
+std::string FindCli() { return lenstrans::FindLlamaCliPath(); }
+
+std::string EvalOutPath(const char* name) {
+  return lenstrans::JoinPath(lenstrans::EvalOutDir(), name);
 }
 
 void RegisterAppHotkeys() {
@@ -765,6 +755,7 @@ void WorkerLoop() {
       }
     }
     const auto tick = std::chrono::steady_clock::now();
+    if (g.local) g.local->MaybeIdleUnload(lenstrans::kLocalIdleUnloadMs);
     bool any_awake = false;
     if (!sleep_all) {
       for (int bi = 0; bi < nbox; ++bi) {
@@ -1212,7 +1203,7 @@ bool WriteBgraBmp(const lenstrans::win::BgraFrame& fr, const char* path) {
   fh.bfType = 0x4D42;
   fh.bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
   fh.bfSize = fh.bfOffBits + px;
-  CreateDirectoryA("D:\\works\\LensTrans\\tools\\eval\\out", nullptr);
+  lenstrans::EnsureDir(lenstrans::EvalOutDir());
   std::ofstream f(path, std::ios::binary);
   if (!f) return false;
   f.write(reinterpret_cast<const char*>(&fh), sizeof(fh));
@@ -1242,7 +1233,7 @@ bool WriteScreenBmp(const RECT& r, const char* path) {
   fh.bfType = 0x4D42;
   fh.bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
   fh.bfSize = fh.bfOffBits + px;
-  CreateDirectoryA("D:\\works\\LensTrans\\tools\\eval\\out", nullptr);
+  lenstrans::EnsureDir(lenstrans::EvalOutDir());
   std::ofstream f(path, std::ios::binary);
   bool ok = false;
   if (f && bits) {
@@ -1271,8 +1262,8 @@ void PumpPendingMessages() {
 }
 
 void WriteHotkeyProbeArtifacts() {
-  CreateDirectoryA("D:\\works\\LensTrans\\tools\\eval\\out", nullptr);
-  std::ofstream f("D:\\works\\LensTrans\\tools\\eval\\out\\hotkey-probe.md", std::ios::binary);
+  lenstrans::EnsureDir(lenstrans::EvalOutDir());
+  std::ofstream f(EvalOutPath("hotkey-probe.md"), std::ios::binary);
   if (!f) return;
   f << "# Hotkey WM_HOTKEY probe (edit / click-through toggle)\n\n"
     << "- command: `.\\build\\Release\\lenstrans_overlay.exe --e2e-hotkey-probe --no-onboard`\n"
@@ -1315,12 +1306,12 @@ void RunHotkeyProbeOnce() {
 }
 
 void WriteUiHwndArtifacts() {
-  CreateDirectoryA("D:\\works\\LensTrans\\tools\\eval\\out", nullptr);
+  lenstrans::EnsureDir(lenstrans::EvalOutDir());
   const HWND settings = FindWindowW(L"LensTransSettings", L"LensTrans 设置");
   const HWND onboard = FindWindowW(L"LensTransOnboard", nullptr);
   g.e2e_ui_settings = settings != nullptr;
   g.e2e_ui_onboard = onboard != nullptr;
-  std::ofstream f("D:\\works\\LensTrans\\tools\\eval\\out\\ui-hwnd.md", std::ios::binary);
+  std::ofstream f(EvalOutPath("ui-hwnd.md"), std::ios::binary);
   if (!f) return;
   f << "# UI HWND probe\n\n"
     << "- command: `.\\build\\Release\\lenstrans_overlay.exe --e2e-ui " << g.e2e_ui_sec << "`\n"
@@ -1364,8 +1355,8 @@ void WriteE2eArtifacts() {
                         : two_box            ? "overlay-two-box.md"
                         : g.e2e_contrast     ? "overlay-contrast-e2e.md"
                                              : "overlay-e2e.md";
-  const std::string bmp_path = std::string("D:\\works\\LensTrans\\tools\\eval\\out\\") + bmp_name;
-  const std::string md_path = std::string("D:\\works\\LensTrans\\tools\\eval\\out\\") + md_name;
+  const std::string bmp_path = EvalOutPath(bmp_name);
+  const std::string md_path = EvalOutPath(md_name);
   const bool bmp_ok = WriteScreenBmp(shot, bmp_path.c_str());
   std::string log;
   {

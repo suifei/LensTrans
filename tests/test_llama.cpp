@@ -1,4 +1,6 @@
 #include "lenstrans/engine.hpp"
+#include "lenstrans/model_meta.hpp"
+#include "lenstrans/paths.hpp"
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -14,11 +16,12 @@
 #include <vector>
 
 static std::string ModelPath() {
-  const char* p = "D:\\works\\LensTrans\\models\\qwen2.5-0.5b-instruct-q4_k_m.gguf";
-#ifdef _WIN32
-  if (GetFileAttributesA(p) != INVALID_FILE_ATTRIBUTES) return p;
-#endif
-  return {};
+  const std::string p = lenstrans::FindDefaultModelPath();
+  return lenstrans::FileExists(p) ? p : std::string{};
+}
+
+static std::string OutPath(const char* name) {
+  return lenstrans::JoinPath(lenstrans::EvalOutDir(), name);
 }
 
 #ifdef _WIN32
@@ -148,13 +151,14 @@ static std::vector<std::string> ReadLines(const char* path) {
 }
 
 static int RunFlores50(lenstrans::IEngine* eng) {
-  const char* enPath = "D:\\works\\LensTrans\\tools\\eval\\out\\flores50-en.txt";
-  const char* refPath = "D:\\works\\LensTrans\\tools\\eval\\out\\flores50-ref.txt";
-  const char* outp = "D:\\works\\LensTrans\\tools\\eval\\out\\flores50.md";
-  const auto en = ReadLines(enPath);
-  const auto refs = ReadLines(refPath);
+  const std::string enPath = OutPath("flores50-en.txt");
+  const std::string refPath = OutPath("flores50-ref.txt");
+  const std::string outp = OutPath("flores50.md");
+  lenstrans::EnsureDir(lenstrans::EvalOutDir());
+  const auto en = ReadLines(enPath.c_str());
+  const auto refs = ReadLines(refPath.c_str());
   if (en.empty()) {
-    std::fprintf(stderr, "flores50: missing or empty %s\n", enPath);
+    std::fprintf(stderr, "flores50: missing or empty %s\n", enPath.c_str());
     return 1;
   }
   const int n = static_cast<int>(en.size());
@@ -170,9 +174,7 @@ static int RunFlores50(lenstrans::IEngine* eng) {
     }
     return o;
   };
-  std::ofstream f(outp, std::ios::binary);
-  if (f) {
-    f << "# flores50 greedy EN-ZH (FLORES-200 dev sample, not formal W1, no COMET)\n\n"
+  std::ofstream f(outp.c_str(), std::ios::binary);
       << "- model: qwen2.5-0.5b-instruct-q4_k_m.gguf\n"
       << "- source: FLORES-200 dev eng_Latn / zho_Hans (first " << n << " lines)\n"
       << "- beam: 1 (greedy)\n"
@@ -225,8 +227,9 @@ static int RunQuality10(lenstrans::IEngine* eng) {
        "should click Save after you change the target language so the overlay can restore boxes "
        "on the next start without asking you to place them again."},
   };
-  return RunQualitySuite(eng, "D:\\works\\LensTrans\\tools\\eval\\out\\quality-10.md",
-                         "# quality-10 greedy EN-ZH (not FLORES, not W1)", kRows,
+  const std::string out = OutPath("quality-10.md");
+  lenstrans::EnsureDir(lenstrans::EvalOutDir());
+  return RunQualitySuite(eng, out.c_str(), "# quality-10 greedy EN-ZH (not FLORES, not W1)", kRows,
                          static_cast<int>(sizeof(kRows) / sizeof(kRows[0])));
 }
 
@@ -282,8 +285,9 @@ static int RunQuality30(lenstrans::IEngine* eng) {
        "and unregister cleanly when the tray icon is destroyed during a full automated smoke test "
        "run."},
   };
-  return RunQualitySuite(eng, "D:\\works\\LensTrans\\tools\\eval\\out\\quality-30.md",
-                         "# quality-30 greedy EN-ZH (not FLORES, not W1)", kRows,
+  const std::string out = OutPath("quality-30.md");
+  lenstrans::EnsureDir(lenstrans::EvalOutDir());
+  return RunQualitySuite(eng, out.c_str(), "# quality-30 greedy EN-ZH (not FLORES, not W1)", kRows,
                          static_cast<int>(sizeof(kRows) / sizeof(kRows[0])));
 }
 
@@ -313,8 +317,9 @@ int main(int argc, char** argv) {
   double ws_g = 0, ws_b = 0;
   const int e1 = RunOne(eng.get(), false, "It's on the house.", "greedy", greedy, ws_g, nullptr);
   const int e2 = RunOne(eng.get(), true, "It's on the house.", "beam2", beam, ws_b, nullptr);
-  const char* outp = "D:\\works\\LensTrans\\tools\\eval\\out\\beam2-smoke.md";
-  std::ofstream f(outp, std::ios::binary);
+  const std::string outp = OutPath("beam2-smoke.md");
+  lenstrans::EnsureDir(lenstrans::EvalOutDir());
+  std::ofstream f(outp.c_str(), std::ios::binary);
   if (f) {
     f << "# beam=2 smoke (2026-08-30, in-process llama.cpp b10688)\n\n"
       << "- model: qwen2.5-0.5b-instruct-q4_k_m.gguf\n"

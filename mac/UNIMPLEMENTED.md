@@ -1,34 +1,52 @@
-# macOS 未实现清单（Windows 优先做满）
+# macOS 实现状态（相对 Windows 全链路）
 
-本机是 Windows。下列 Swift **未在本机编译**，不要当成已编过。CMake 不混编 Swift。无 Electron / Tauri。
+本 Cloud/Linux 宿主 **不能** 编译 AppKit / ScreenCaptureKit；真机验收需在 macOS 12.3+（建议 13+）上执行：
+
+```bash
+cd ~/works/LensTrans/mac   # 或仓库 mac/
+swift test                 # LensTransLogic 纯逻辑
+swift build -c release     # 需 Apple SDK；Linux 上 executable 目标会失败属预期
+```
+
+无 Electron / Tauri。CMake 不混编 Swift。
 
 | 文件 | 对等 Windows | 状态 |
 | --- | --- | --- |
-| `App.swift` | `wWinMain` / `Run` | 入口骨架，未编 |
-| `OverlayPanel.swift` | overlay HWND + 穿透 | 接口桩（ignoresMouseEvents） |
-| `Capture.swift` | WGC + BitBlt + PrintWindow | 未实现（ScreenCaptureKit 抛 unimplemented） |
-| `Ocr.swift` | Windows.Media.OCR | 字段已对齐，未跑 Vision |
-| `Present.swift` | `present.hpp` 沉浸/贴条/淡出 | 决策函数已写，未接绘制 |
-| `Engine.swift` | `engine_local` / `engine_cloud` | 接口桩，未接 Metal / URLSession |
-| `Tray.swift` | `Shell_NotifyIcon` 菜单树 | 菜单项骨架，action 未接 |
-| `Settings.swift` | 设置 5 Tab | `present()` 空；云端不预填 |
-| `Onboarding.swift` | 640×420 三步引导 | 文案步骤已标；**禁止为探测启动 SCStream** |
-| `Hotkeys.swift` | `RegisterHotKey` + 点击录入 | Carbon 常量已列，未注册 |
-| `Secrets.swift` | DPAPI + HKCU Run | Keychain / 登录项未接 |
+| `App.swift` | `wWinMain` / `Run` | 入口 + 托盘/热键/引导接线 |
+| `OverlayPanel.swift` | overlay HWND + 穿透 | NSPanel 编辑/穿透/多框 registry + present 绘制 |
+| `Capture.swift` | WGC + BitBlt + PrintWindow | ScreenCaptureKit 实现（需 Mac 编测） |
+| `Ocr.swift` | Windows.Media.OCR | Vision → MacOcrBlock（需 Mac 编测） |
+| `Present.swift` | `present.hpp` | 决策 + AA + 绘制；纯逻辑见 `Logic/` |
+| `Engine.swift` | `engine_local` / `engine_cloud` | 云端 URLSession 已接；本地 Metal 待链 llama.cpp |
+| `Tray.swift` | `Shell_NotifyIcon` | 完整菜单树（引擎/语言/模式/自启/设置/缓存） |
+| `Settings.swift` | 设置 5 Tab | NSTabView 已实现；密钥走 Keychain |
+| `Onboarding.swift` | 640×420 三步引导 | 已实现；**禁止为探测启动 SCStream**；可后台下 GGUF |
+| `Hotkeys.swift` | `RegisterHotKey` | Carbon EventHotKey 注册 |
+| `Secrets.swift` | DPAPI + HKCU Run | Keychain + SMAppService/LaunchAgent |
+| `Logic/PureLogic.swift` | core present/router/cloud parse | 可在无 Cocoa 环境 `swift test` |
+| `Package.swift` | — | SPM：Logic 库 + App + Tests |
 
 | PRD 项 | 状态 | 对应 Windows |
 | --- | --- | --- |
-| NSPanel 穿透/编辑 | 接口桩 | overlay + Ctrl+E |
-| ScreenCaptureKit | 未实现 | WGC + PrintWindow |
-| Vision OCR → OcrBlock | 字段已对齐，未跑 | Windows.Media.OCR |
-| llama.cpp + Metal | 未接 | 进程内 llama.cpp b10688 |
-| 云端 OpenAI 兼容 | 未接 | WinHTTP + DPAPI |
-| 托盘 NSStatusItem | 菜单骨架，未接逻辑 | 托盘完整树 |
-| 设置 5 Tab | 未做窗口 | Win32 Tab + 热键录入 |
-| 3 步引导 + 屏幕录制权限 | 步骤说明已写，无窗口 | 640×420 引导（不发起 WGC） |
-| 多框 / 热键 | 未做 | 多 HWND + RegisterHotKey |
-| 沉浸替换 / 贴条 | 决策桩，未画 | 框内填充+贴条 |
-| 开机自启双向同步 | 未做 | HKCU Run 读/写/删 |
-| 安装器 | 未做 | `tools/pack/pack-windows.ps1` |
+| NSPanel 穿透/编辑 | 已实现代码 | overlay + Ctrl+E |
+| ScreenCaptureKit | 已实现代码，待 Mac 真机 | WGC + PrintWindow |
+| Vision OCR → OcrBlock | 已实现代码，待 Mac 真机 | Windows.Media.OCR |
+| llama.cpp + Metal | **未链**（接口+错误路径） | 进程内 llama.cpp b10688 |
+| 云端 OpenAI 兼容 | URLSession 已接 | WinHTTP + DPAPI |
+| 托盘 NSStatusItem | 已接 | 托盘完整树 |
+| 设置 5 Tab | 已接 | Win32 Tab + 热键录入 |
+| 3 步引导 + 屏幕录制权限 | 已接（预检不启流） | 640×420 引导 |
+| 多框 / 热键 | OverlayBoxStore + HotkeyCenter | 多 HWND + RegisterHotKey |
+| 沉浸替换 / 贴条 | Present 绘制已接 | 框内填充+贴条 |
+| 开机自启双向同步 | SMAppService/LaunchAgent | HKCU Run |
+| 安装器 | **未做** | `tools/pack/pack-windows.ps1` |
+| 本地 Metal 推理 | **未做** | LENSTRANS_WITH_LLAMA |
 
-不做：Electron / Tauri / 跨平台 UI 壳。Xcode 工程仍待后续在 Mac 上建。
+## 仍需 Mac 真机才能关闭的项
+
+1. Xcode / `swift build` App 目标（ScreenCaptureKit、Vision、AppKit）
+2. 屏幕录制授权后的 Capture→OCR→Present 端到端
+3. llama.cpp Metal 链接与 WS 采样
+4. 签名 / 公证 / 安装器
+
+不做：Electron / Tauri / 跨平台 UI 壳。
