@@ -31,6 +31,7 @@ let package = Package(
             sources: [
                 "App.swift",
                 "Capture.swift",
+                "E2e.swift",
                 "Engine.swift",
                 "Hotkeys.swift",
                 "Ocr.swift",

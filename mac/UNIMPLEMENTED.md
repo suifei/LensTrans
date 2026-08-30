@@ -45,12 +45,12 @@ bash ../tools/eval/mac-smoke.sh
 ## 本机已验证（见 `docs/mac-dev-status.md` / `tools/eval/out/`）
 
 - `swift test`、`swift build -c release`
-- `tools/eval/mac-smoke.sh`
+- `tools/eval/mac-smoke.sh` / `tools/eval/mac-e2e.sh`（合成帧 OCR→翻译→Present；SCKit 有权限时加测）
 
 ## 仍明确未完成
 
 1. llama.cpp **Metal 进程内**链接与 WS 采样签字
-2. 屏幕录制授权后的人工 e2e 签字（拉框 → 译文覆盖）
+2. 给 App 正式屏幕录制授权后的 **SCKit** 签字（自动 e2e 中为 soft）
 3. `.app` 打包、签名、公证、安装器
 
 不做：Electron / Tauri / 跨平台 UI 壳。

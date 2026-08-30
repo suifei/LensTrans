@@ -6,6 +6,21 @@ import AppKit
 struct LensTransMacApp {
     static func main() {
         let app = NSApplication.shared
+        let e2e = MacE2e.parse(Array(CommandLine.arguments.dropFirst()))
+        if e2e.enabled {
+            app.setActivationPolicy(.regular)
+            Task { @MainActor in
+                if e2e.noOnboard || FirstRun.needsOnboarding {
+                    SettingsStore.shared.downloadModel = false
+                    SettingsStore.shared.save()
+                }
+                let code = await MacE2e.run(e2e)
+                exit(code)
+            }
+            app.run()
+            return
+        }
+
         app.setActivationPolicy(.accessory)
         _ = TrayController.shared
         HotkeyCenter.shared.onNewBox = { _ = OverlayBoxStore.shared.createBox() }

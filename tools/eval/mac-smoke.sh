@@ -62,6 +62,8 @@ hello<|im_end|>
   python3 "$ROOT/tools/eval/mac-logic-verify.py"
   echo "--- mac-ocr-smoke ---"
   swift "$ROOT/tools/eval/mac-ocr-smoke.swift"
+  echo "--- mac-e2e ---"
+  bash "$ROOT/tools/eval/mac-e2e.sh"
   echo "RESULT=PASS"
 } | tee "$LOG"
 echo "wrote $LOG"
