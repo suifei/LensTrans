@@ -25,18 +25,32 @@ def main() -> int:
     rows: list[tuple[str, str, str, str]] = []
     # name, auto?, status, evidence
 
-    # Constraints
+    # Constraints — pure Python scan (no ripgrep dependency on CI)
     ban = []
+    skip_dirs = {".git", "build", ".build", "third_party", "node_modules", "__pycache__"}
+    ban_ext = {".json", ".rs", ".toml", ".lock", ".gradle", ".csproj", ".fsproj"}
     for pat in ("electron", "tauri", "hunyuan", "hy-mt"):
-        code, out = run(["rg", "-i", "-l", pat, str(ROOT), "-g", "!*.md", "-g", "!.git/**"])
-        # allowlist known ban comments in source
-        hits = [l for l in out.splitlines() if l.strip()]
-        # Filter to dependency-like files
-        bad = [h for h in hits if h.endswith((".json", ".rs", ".toml")) or "node_modules" in h]
-        ban.extend(bad)
-    rows.append(("no Electron/Tauri/Hunyuan deps", "yes", "pass" if not ban else "fail",
-                 "rg scan; hits=" + ",".join(ban) if ban else "clean"))
-
+        for path in ROOT.rglob("*"):
+            if not path.is_file():
+                continue
+            if any(p in skip_dirs for p in path.parts):
+                continue
+            if path.suffix.lower() in {".md", ".png", ".jpg", ".gguf", ".pdf"}:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8", errors="ignore").lower()
+            except OSError:
+                continue
+            if pat in text and path.suffix.lower() in ban_ext:
+                ban.append(str(path.relative_to(ROOT)))
+    rows.append(
+        (
+            "no Electron/Tauri/Hunyuan deps",
+            "yes",
+            "pass" if not ban else "fail",
+            "scan; hits=" + ",".join(ban) if ban else "clean",
+        )
+    )
     # Size budget arithmetic (product invariant)
     gguf = 491400032
     base_lim, off_lim = 30_000_000, 520_000_000
