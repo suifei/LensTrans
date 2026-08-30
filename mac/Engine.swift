@@ -1,7 +1,9 @@
 import Foundation
 import LensTransLogic
+import LlamaBridge
 
-// Local llama.cpp (Metal) placeholder + OpenAI-compatible cloud via URLSession.
+// Local llama.cpp Metal in-process (preferred) + OpenAI-compatible cloud via URLSession.
+// CLI (llama-completion) is fallback when in-process link/load fails.
 // No default gateway / no prefilled host / key / model.
 
 struct MacTranslateRequest {
@@ -18,6 +20,8 @@ struct MacTranslateResult {
     var latencyMs: Int = 0
     var beamWidth: Int = 1
     var fromCache: Bool = false
+    /// "metal" | "cli" | "cloud" | ""
+    var backend: String = ""
 }
 
 protocol MacEngine: AnyObject {
@@ -34,16 +38,26 @@ extension MacEngine {
     func maybeIdleUnload(idleMs _: Int64) {}
 }
 
+/// Thin Swift wrapper over C LlamaBridge (third_party llama.cpp Metal).
+enum LlamaInProcess {
+    static var available: Bool { lenstrans_llama_available() != 0 }
+}
+
 final class MacLocalEngine: MacEngine {
     private let modelPath: String
     private let cliPath: String?
     private var lastActivity = Date()
-    /// Process-in Metal (LENSTRANS_WITH_LLAMA) is not linked in SPM yet.
-    /// Runtime path: spawn llama-cli (Homebrew / PATH / third_party) — parity with Windows CliEngine.
-    private var loaded = false
+    private var native: OpaquePointer?
+    private let nativeLock = NSLock()
 
     var ready: Bool {
-        FileManager.default.fileExists(atPath: modelPath) && cliPath != nil
+        FileManager.default.fileExists(atPath: modelPath)
+            && (LlamaInProcess.available || cliPath != nil)
+    }
+
+    /// True when this build linked Metal llama.cpp and the model file exists.
+    var metalReady: Bool {
+        LlamaInProcess.available && FileManager.default.fileExists(atPath: modelPath)
     }
 
     init(modelPath: String, cliPath: String? = nil) {
@@ -51,9 +65,18 @@ final class MacLocalEngine: MacEngine {
         self.cliPath = cliPath ?? MacPaths.findLlamaCli()
     }
 
+    deinit { unload() }
+
     func noteActivity() { lastActivity = Date() }
 
-    func unload() { loaded = false }
+    func unload() {
+        nativeLock.lock()
+        defer { nativeLock.unlock() }
+        if let eng = native {
+            lenstrans_llama_destroy(eng)
+            native = nil
+        }
+    }
 
     func maybeIdleUnload(idleMs: Int64) {
         let limit = idleMs > 0 ? idleMs : ModelMetaLogic.idleUnloadMs
@@ -69,21 +92,77 @@ final class MacLocalEngine: MacEngine {
             r.error = "local model missing"
             return r
         }
-        guard let cli = cliPath else {
-            r.error = "llama-completion/llama-cli not found (brew install llama.cpp or link Metal)"
-            return r
-        }
         let prompt = LocalPromptLogic.buildTranslatePrompt(
             text: req.text, tgtLang: req.tgtLang)
+        let maxNew = req.quality ? 96 : 48
+
+        // 1) Prefer in-process Metal.
+        if LlamaInProcess.available {
+            if let metal = translateMetal(prompt: prompt, maxNew: maxNew) {
+                return metal
+            }
+        }
+
+        // 2) Fallback: spawn llama-completion / llama-cli.
+        guard let cli = cliPath else {
+            r.error = LlamaInProcess.available
+                ? "in-process Metal failed and llama-completion/llama-cli not found"
+                : "llama-completion/llama-cli not found (brew install llama.cpp or fetch-llama-cpp.sh)"
+            return r
+        }
         let t0 = Date()
         do {
             let out = try Self.runCli(cli: cli, model: modelPath, prompt: prompt)
             r.text = LocalPromptLogic.stripThink(out)
             r.latencyMs = Int(Date().timeIntervalSince(t0) * 1000)
+            r.backend = "cli"
             if r.text.isEmpty { r.error = "empty local output" }
         } catch {
             r.error = error.localizedDescription
             r.latencyMs = Int(Date().timeIntervalSince(t0) * 1000)
+            r.backend = "cli"
+        }
+        return r
+    }
+
+    private func ensureNative() -> OpaquePointer? {
+        nativeLock.lock()
+        defer { nativeLock.unlock() }
+        if let eng = native { return eng }
+        guard let eng = lenstrans_llama_create(modelPath) else { return nil }
+        native = eng
+        return eng
+    }
+
+    private func translateMetal(prompt: String, maxNew: Int) -> MacTranslateResult? {
+        guard let eng = ensureNative() else { return nil }
+        var out = [CChar](repeating: 0, count: 8192)
+        var err = [CChar](repeating: 0, count: 512)
+        var latency: Int32 = 0
+        let rc = prompt.withCString { p in
+            lenstrans_llama_translate(
+                eng, p, Int32(maxNew),
+                &out, Int32(out.count),
+                &latency,
+                &err, Int32(err.count))
+        }
+        var r = MacTranslateResult()
+        r.latencyMs = Int(latency)
+        r.backend = "metal"
+        if rc != 0 {
+            let msg = String(cString: err)
+            // Soft-fail → caller may try CLI.
+            if msg.isEmpty { return nil }
+            // Load/link hard failures: allow CLI fallback.
+            if msg.contains("load failed") || msg.contains("not linked") {
+                return nil
+            }
+            r.error = msg
+            return r
+        }
+        r.text = LocalPromptLogic.stripThink(String(cString: out))
+        if r.text.isEmpty {
+            r.error = "empty local output"
         }
         return r
     }
@@ -110,7 +189,6 @@ final class MacLocalEngine: MacEngine {
             "--no-display-prompt",
         ]
         if !isCompletion {
-            // Older one-shot llama-cli may need explicit log disable.
             args.append("--log-disable")
         }
         proc.arguments = args
@@ -204,6 +282,7 @@ final class MacCloudEngine: MacEngine {
         r.text = acc
         r.error = err
         r.latencyMs = Int(Date().timeIntervalSince(t0) * 1000)
+        r.backend = "cloud"
         return r
     }
 

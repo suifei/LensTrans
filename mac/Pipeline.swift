@@ -143,29 +143,37 @@ final class OverlayWatchSession {
 
 @MainActor
 enum MacPaths {
-    /// Bundle Resources (offline .app) or Application Support / repo models/.
+    /// Prefer bundled `.app` Resources/models, then settings override, App Support, repo models/.
     static func resolveModelPath() -> String {
         let store = SettingsStore.shared
+        let name = ModelMetaLogic.fileName
+
+        // 1) App-bundled GGUF (default offline pack) — highest priority for local inference.
+        var bundled: [String] = []
+        if let res = Bundle.main.resourcePath {
+            bundled.append(res + "/models/" + name)
+        }
+        if let exe = Bundle.main.executableURL?.deletingLastPathComponent() {
+            bundled.append(
+                exe.deletingLastPathComponent().appendingPathComponent("Resources/models/\(name)").path)
+        }
+        for p in bundled where FileManager.default.fileExists(atPath: p) {
+            return p
+        }
+
+        // 2) Explicit user/settings path.
         if !store.modelPath.isEmpty, FileManager.default.fileExists(atPath: store.modelPath) {
             return store.modelPath
         }
-        let name = ModelMetaLogic.fileName
-        var cands: [String] = [
+
+        // 3) Application Support / cwd / repo checkout (dev).
+        let cands: [String] = [
             store.modelsDir.appendingPathComponent(name).path,
-        ]
-        if let res = Bundle.main.resourcePath {
-            cands.append(res + "/models/" + name)
-        }
-        // .app/Contents/MacOS/LensTrans → ../Resources/models
-        if let exe = Bundle.main.executableURL?.deletingLastPathComponent() {
-            cands.append(exe.deletingLastPathComponent().appendingPathComponent("Resources/models/\(name)").path)
-        }
-        cands.append(contentsOf: [
             FileManager.default.currentDirectoryPath + "/models/" + name,
             repoRootCandidate() + "/models/" + name,
             NSHomeDirectory() + "/works/LensTrans/lenstrans/models/" + name,
             NSHomeDirectory() + "/works/LensTrans/models/" + name,
-        ])
+        ]
         for p in cands where FileManager.default.fileExists(atPath: p) {
             return p
         }

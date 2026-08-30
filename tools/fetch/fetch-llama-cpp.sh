@@ -151,5 +151,6 @@ else
   echo "RESULT=PARTIAL — no CLI in $BIN_DIR; brew install llama.cpp for CLI engine"
 fi
 
-echo "LensTrans Mac finds CLI via PATH / Homebrew / third_party/llama.cpp/build/bin"
-echo "Metal in-process link in SPM App remains UNIMPLEMENTED (see mac/UNIMPLEMENTED.md)"
+echo "LensTrans Mac: Package.swift links libllama when build/bin/libllama.dylib exists (in-process Metal)."
+echo "CLI fallback: PATH / Homebrew / third_party/llama.cpp/build/bin / .app Resources/bin"
+echo "Pack: bash tools/pack/pack-mac.sh  # default bundles GGUF from models/ (gitignored)"

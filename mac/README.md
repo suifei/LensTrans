@@ -3,17 +3,19 @@
 ```bash
 cd mac
 swift test                              # LogicTests
-swift build -c release --product LensTrans
+swift build -c release --product LensTrans   # 有 third_party libllama 时链 Metal 进程内
 bash ../tools/eval/mac-smoke.sh         # 本机门禁（含 e2e）
 ./.build/release/LensTrans              # 托盘 LT（accessory）
 ./.build/release/LensTrans --no-onboard # 跳过首次引导
-./.build/release/LensTrans --e2e --no-onboard
+./.build/release/LensTrans --e2e --e2e-llama --no-onboard
 ```
+
+本地引擎：**进程内 Metal**（`Native/LlamaBridge`）优先；失败再 spawn `llama-completion`。
 
 ## 一键本地跑（推荐）
 
 ```bash
-# 断点续传拉 GGUF → release 构建 → 打 .app → 托盘启动（本地引擎）
+# 断点续传拉 GGUF → release 构建 → 打 .app（默认内置 GGUF）→ 托盘启动
 bash tools/run/run-mac.sh
 bash tools/run/run-mac.sh --e2e          # 自动门禁
 bash tools/run/run-mac.sh --fetch-llama  # 额外构建 third_party llama.cpp b10688
@@ -22,19 +24,21 @@ bash tools/run/run-mac.sh --fetch-llama  # 额外构建 third_party llama.cpp b1
 ## 模型 / llama.cpp
 
 ```bash
-bash tools/fetch/fetch-gguf.sh --to-app-support   # models/README.md 锁 size+SHA
-bash tools/fetch/fetch-llama-cpp.sh               # third_party/README.md 钉 b10688
-# 或: brew install llama.cpp   # 用 llama-completion
+bash tools/fetch/fetch-gguf.sh                    # → models/（gitignore，不进 git）
+bash tools/fetch/fetch-llama-cpp.sh               # Metal 库 + CLI；钉 b10688
+# 或: brew install llama.cpp   # 仅 CLI 回退
 ```
 
-## 打包 / 安装（双轨）
+运行时模型路径优先 **`.app/Contents/Resources/models/`**（打包内置），再设置路径 / Application Support / 仓库 `models/`。
+
+## 打包 / 安装
 
 ```bash
-bash tools/pack/pack-mac.sh                 # 基础包 dist/macos/LensTrans.app（无 GGUF）
-bash tools/pack/pack-mac.sh --offline       # 离线包 dist/macos-offline/（含 Resources/models/*.gguf）
-bash tools/pack/install-mac.sh --user       # → ~/Applications
-bash tools/pack/install-mac.sh --offline --user
-# 或把 .app 拖到 /Applications
+bash tools/pack/pack-mac.sh                 # 默认：内置 GGUF → dist/macos/（≤520MB）
+bash tools/pack/pack-mac.sh --offline       # 同上（别名）
+bash tools/pack/pack-mac.sh --base          # 瘦身包无 GGUF → dist/macos-base/
+bash tools/pack/install-mac.sh --user       # → ~/Applications（默认含模型）
+bash tools/pack/install-mac.sh --base --user
 ```
 
 可选签名（本机有 Developer ID 时）：

@@ -129,6 +129,8 @@ enum MacE2e {
                     lines.append("- translate_text: \(r.text)")
                     lines.append("- translate_error: \(r.error)")
                     lines.append("- translate_ms: \(r.latencyMs)")
+                    lines.append("- translate_backend: \(r.backend.isEmpty ? "?" : r.backend)")
+                    lines.append("- metal_linked: \(LlamaInProcess.available)")
                 } else {
                     detail = "llama requested but model/cli missing"
                     lines.append("- translate_skip: \(detail)")

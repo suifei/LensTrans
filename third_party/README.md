@@ -28,17 +28,19 @@ Needed afterwards:
 
 CMake turns `LENSTRANS_WITH_LLAMA=ON` when those files exist. Forcing the option without `llama.lib` is a hard error, not a silent fallback.
 
-## macOS (CLI engine path + optional Metal build)
+## macOS (in-process Metal + CLI fallback)
 
-SPM App does **not** link llama.cpp in-process yet (`mac/UNIMPLEMENTED.md`). Runtime uses `llama-completion` / `llama-cli` (Homebrew or this tree).
+SPM App links `libllama` / `libggml*` when present under `third_party/llama.cpp/build/bin`
+(`mac/Native/LlamaBridge` + `LENSTRANS_WITH_LLAMA`). Runtime prefers in-process Metal;
+`llama-completion` / `llama-cli` remains the fallback.
 
-**Network:** GitHub clone **prefers** local HTTP proxy `http://127.0.0.1:8080` (`tools/fetch/_proxy.sh`). GGUF uses ModelScope — see `models/README.md`.
+**Network:** GitHub clone **prefers** local HTTP proxy `http://127.0.0.1:8080` (`tools/fetch/_proxy.sh`). GGUF uses ModelScope — see `models/README.md`. GGUF is **never** committed; `pack-mac.sh` copies it into the `.app` at pack time (default bundled track ≤520 MB).
 
 One-shot helper (clone pin + Metal Release build):
 
 ```bash
 bash tools/fetch/fetch-llama-cpp.sh
-# → third_party/llama.cpp/build/bin/llama-cli
+# → third_party/llama.cpp/build/bin/libllama.dylib (+ llama-completion)
 ```
 
 Manual equivalent (proxy first for GitHub):
@@ -54,8 +56,10 @@ cmake -S third_party/llama.cpp -B third_party/llama.cpp/build \
 cmake --build third_party/llama.cpp/build --config Release --target llama-cli
 ```
 
-Alternatively: `brew install llama.cpp` and ensure `llama-completion` is on `PATH` (preferred for batch translate; avoid chat-only `llama-cli` UX on newer Homebrew).
+Alternatively: `brew install llama.cpp` and ensure `llama-completion` is on `PATH` (CLI fallback only).
 
-`pack-mac.sh` may copy third_party `llama-cli` (+ dylibs) into `LensTrans.app/Contents/Resources/bin/`. GGUF is never under `third_party/`.
+`pack-mac.sh` copies Metal dylibs into `LensTrans.app/Contents/Frameworks/` (in-process) and
+CLI + dylibs into `Resources/bin/`. Default pack also copies `models/*.gguf` into
+`Resources/models/` (from local `models/` or Application Support — not from git).
 
 Qwen weight license copy: [`tools/eval/licenses/Qwen2.5-0.5B-Instruct-LICENSE.txt`](../tools/eval/licenses/Qwen2.5-0.5B-Instruct-LICENSE.txt).

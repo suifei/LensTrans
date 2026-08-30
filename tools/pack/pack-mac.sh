@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
-# Pack LensTrans macOS release into LensTrans.app (dual-track, parity with pack-windows.ps1).
+# Pack LensTrans macOS release into LensTrans.app.
 #
-# Base pack (default): dist/macos/LensTrans.app — NO GGUF (≤ ~30 MB binary tree).
-# Offline pack:        dist/macos-offline/LensTrans.app — base + Resources/models/*.gguf (≤ 520 MB).
+# Default (bundled model): dist/macos/LensTrans.app — includes Resources/models/*.gguf (≤ 520 MB).
+# Slim base (no GGUF):     bash tools/pack/pack-mac.sh --base → dist/macos-base/ (≤ ~30 MB intent).
+#
+# GGUF is NEVER committed to git; copied at pack time from models/ or Application Support.
+# Metal llama.cpp dylibs go to Contents/Frameworks/ (in-process) + Resources/bin (CLI fallback).
 #
 # Usage:
-#   bash tools/pack/pack-mac.sh
-#   bash tools/pack/pack-mac.sh --offline          # requires models/*.gguf (fetch-gguf.sh)
+#   bash tools/pack/pack-mac.sh              # default: bundled GGUF
+#   bash tools/pack/pack-mac.sh --offline    # alias of default
+#   bash tools/pack/pack-mac.sh --base       # no GGUF
 #   bash tools/pack/pack-mac.sh --skip-build
 #   CODESIGN_IDENTITY="Developer ID Application: …" bash tools/pack/pack-mac.sh --sign
-# Notarization is NOT run (needs Apple notary credentials).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-OUT_ROOT="${OUT_ROOT:-$ROOT/dist/macos}"
-BIN_SRC="$ROOT/mac/.build/release/LensTrans"
-PLIST_SRC="$ROOT/mac/Info.plist"
 NAME=qwen2.5-0.5b-instruct-q4_k_m.gguf
 EXPECTED_BYTES=491400032
 LIMIT_BASE=30000000
@@ -23,16 +23,22 @@ LIMIT_OFF=520000000
 SKIP_BUILD=0
 DO_SIGN=0
 DO_ZIP=1
-OFFLINE=0
+# Default: ship with bundled GGUF (offline track).
+BUNDLE_GGUF=1
+OUT_ROOT="${OUT_ROOT:-$ROOT/dist/macos}"
+BIN_SRC="$ROOT/mac/.build/release/LensTrans"
+PLIST_SRC="$ROOT/mac/Info.plist"
+LLAMA_BIN="$ROOT/third_party/llama.cpp/build/bin"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-build) SKIP_BUILD=1 ;;
     --sign) DO_SIGN=1 ;;
     --no-zip) DO_ZIP=0 ;;
-    --offline) OFFLINE=1 ;;
+    --offline) BUNDLE_GGUF=1; OUT_ROOT="${OUT_ROOT_OFFLINE:-$ROOT/dist/macos}" ;;
+    --base) BUNDLE_GGUF=0; OUT_ROOT="${OUT_ROOT_BASE:-$ROOT/dist/macos-base}" ;;
     -h|--help)
-      sed -n '2,14p' "$0"
+      sed -n '2,16p' "$0"
       exit 0
       ;;
     *)
@@ -48,13 +54,14 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 1
 fi
 
-if [[ "$OFFLINE" -eq 1 ]]; then
-  OUT_ROOT="${OUT_ROOT_OFFLINE:-$ROOT/dist/macos-offline}"
-fi
 APP="$OUT_ROOT/LensTrans.app"
 
 if [[ "$SKIP_BUILD" -eq 0 ]]; then
   echo "--- swift build -c release ---"
+  if [[ ! -f "$LLAMA_BIN/libllama.dylib" ]]; then
+    echo "NOTE: libllama.dylib missing — run: bash tools/fetch/fetch-llama-cpp.sh" >&2
+    echo "      building without LENSTRANS_WITH_LLAMA (CLI fallback only)" >&2
+  fi
   (cd "$ROOT/mac" && swift build -c release --product LensTrans)
 fi
 
@@ -75,14 +82,15 @@ if find "$ROOT/mac" -name '*.gguf' 2>/dev/null | grep -q .; then
 fi
 
 GGUF_SRC=""
-if [[ "$OFFLINE" -eq 1 ]]; then
+if [[ "$BUNDLE_GGUF" -eq 1 ]]; then
   for c in \
     "$ROOT/models/$NAME" \
     "$HOME/Library/Application Support/LensTrans/models/$NAME"; do
     if [[ -f "$c" ]]; then GGUF_SRC="$c"; break; fi
   done
   if [[ -z "$GGUF_SRC" ]]; then
-    echo "offline pack needs $NAME — run: bash tools/fetch/fetch-gguf.sh" >&2
+    echo "bundled pack needs $NAME — run: bash tools/fetch/fetch-gguf.sh" >&2
+    echo "(or place file under models/; GGUF is gitignored, not committed)" >&2
     exit 1
   fi
   SZ=$(stat -f%z "$GGUF_SRC")
@@ -92,11 +100,26 @@ if [[ "$OFFLINE" -eq 1 ]]; then
   fi
 fi
 
+copy_llama_dylibs() {
+  local dest="$1"
+  mkdir -p "$dest"
+  # Regular files first, then recreate symlinks (loader-facing .0 / unversioned).
+  find "$LLAMA_BIN" -maxdepth 1 -type f -name 'lib*.dylib' -exec cp -f {} "$dest/" \;
+  while IFS= read -r link; do
+    local base target
+    base=$(basename "$link")
+    target=$(readlink "$link")
+    ln -sfn "$target" "$dest/$base"
+  done < <(find "$LLAMA_BIN" -maxdepth 1 -type l -name 'lib*.dylib')
+}
+
 stage_app() {
   local dest_app="$1"
   echo "--- stage $dest_app ---"
   rm -rf "$dest_app"
-  mkdir -p "$dest_app/Contents/MacOS" "$dest_app/Contents/Resources"
+  mkdir -p "$dest_app/Contents/MacOS" \
+           "$dest_app/Contents/Resources" \
+           "$dest_app/Contents/Frameworks"
 
   cp "$PLIST_SRC" "$dest_app/Contents/Info.plist"
   ensure_plist_key() {
@@ -117,11 +140,16 @@ stage_app() {
   chmod +x "$dest_app/Contents/MacOS/LensTrans"
   printf 'APPL????' > "$dest_app/Contents/PkgInfo"
 
-  # Only ship third_party CLI (+ dylibs). Do NOT copy Homebrew cellar binaries.
+  # In-process Metal: Frameworks next to MacOS (@executable_path/../Frameworks).
+  if [[ -d "$LLAMA_BIN" ]] && [[ -f "$LLAMA_BIN/libllama.dylib" ]]; then
+    copy_llama_dylibs "$dest_app/Contents/Frameworks"
+  fi
+
+  # CLI fallback: third_party llama-completion (+ same dylibs under Resources/bin).
   local tp_bin=""
   for c in \
-    "$ROOT/third_party/llama.cpp/build/bin/llama-completion" \
-    "$ROOT/third_party/llama.cpp/build/bin/llama-cli"; do
+    "$LLAMA_BIN/llama-completion" \
+    "$LLAMA_BIN/llama-cli"; do
     if [[ -x "$c" ]]; then tp_bin="$c"; break; fi
   done
   if [[ -n "$tp_bin" ]]; then
@@ -129,40 +157,31 @@ stage_app() {
     local rbin="$dest_app/Contents/Resources/bin"
     cp -f "$tp_bin" "$rbin/$(basename "$tp_bin")"
     chmod +x "$rbin/"*
-    local sbin
-    sbin="$(dirname "$tp_bin")"
-    # Copy only regular dylib files (not symlink duplicates — keeps offline ≤520MB).
-    find "$sbin" -maxdepth 1 -type f -name '*.dylib' -exec cp -f {} "$rbin/" \;
-    # Recreate loader-facing symlinks (.0.dylib / unversioned).
-    while IFS= read -r link; do
-      local base target
-      base=$(basename "$link")
-      target=$(readlink "$link")
-      ln -sfn "$target" "$rbin/$base"
-    done < <(find "$sbin" -maxdepth 1 -type l -name '*.dylib')
+    copy_llama_dylibs "$rbin"
+  fi
+
+  if [[ "$BUNDLE_GGUF" -eq 1 && -n "$GGUF_SRC" ]]; then
+    mkdir -p "$dest_app/Contents/Resources/models"
+    cp -f "$GGUF_SRC" "$dest_app/Contents/Resources/models/$NAME"
+    if [[ -f "$ROOT/tools/eval/licenses/Qwen2.5-0.5B-Instruct-LICENSE.txt" ]]; then
+      cp -f "$ROOT/tools/eval/licenses/Qwen2.5-0.5B-Instruct-LICENSE.txt" \
+        "$dest_app/Contents/Resources/models/"
+    fi
   fi
 
   cat > "$dest_app/Contents/Resources/README.txt" <<EOF
 LensTrans macOS app bundle.
-Base pack: GGUF not included — download via onboarding or:
-  bash tools/fetch/fetch-gguf.sh --to-app-support
-Offline pack: Resources/models/$NAME
+Default pack: Resources/models/$NAME bundled (gitignored; copied at pack time).
+Slim pack (--base): no GGUF — download via onboarding or fetch-gguf.sh --to-app-support.
+Local engine: in-process Metal llama.cpp when linked; CLI fallback in Resources/bin.
 EOF
 }
 
 stage_app "$APP"
 
-if [[ "$OFFLINE" -eq 1 ]]; then
-  mkdir -p "$APP/Contents/Resources/models"
-  cp -f "$GGUF_SRC" "$APP/Contents/Resources/models/$NAME"
-  # Also copy Qwen license next to weights for redistrib.
-  if [[ -f "$ROOT/tools/eval/licenses/Qwen2.5-0.5B-Instruct-LICENSE.txt" ]]; then
-    cp -f "$ROOT/tools/eval/licenses/Qwen2.5-0.5B-Instruct-LICENSE.txt" \
-      "$APP/Contents/Resources/models/"
-  fi
-else
+if [[ "$BUNDLE_GGUF" -eq 0 ]]; then
   if find "$APP" -name '*.gguf' | grep -q .; then
-    echo "GGUF leaked into base app bundle" >&2
+    echo "GGUF leaked into --base app bundle" >&2
     exit 1
   fi
 fi
@@ -192,10 +211,9 @@ sign_app "$APP"
 BIN_BYTES=$(stat -f%z "$APP/Contents/MacOS/LensTrans")
 APP_BYTES=$(du -sk "$APP" | awk '{print $1 * 1024}')
 echo "binary_bytes=$BIN_BYTES app_approx_bytes=$APP_BYTES"
-echo "app=$APP"
+echo "app=$APP bundled_gguf=$BUNDLE_GGUF"
 
-if [[ "$OFFLINE" -eq 0 && "$APP_BYTES" -gt "$LIMIT_BASE" ]]; then
-  # Soft warn: ad-hoc + bundled CLI may exceed 30e6; base product intent is no GGUF.
+if [[ "$BUNDLE_GGUF" -eq 0 && "$APP_BYTES" -gt "$LIMIT_BASE" ]]; then
   if find "$APP" -name '*.gguf' | grep -q .; then
     echo "base pack exceeds 30MB and contains GGUF — FAIL" >&2
     exit 1
@@ -203,19 +221,23 @@ if [[ "$OFFLINE" -eq 0 && "$APP_BYTES" -gt "$LIMIT_BASE" ]]; then
   echo "NOTE: base app_approx_bytes=$APP_BYTES > 30e6 (CLI/dylibs); GGUF absent OK"
 fi
 
-if [[ "$OFFLINE" -eq 1 ]]; then
+if [[ "$BUNDLE_GGUF" -eq 1 ]]; then
   if [[ "$APP_BYTES" -gt "$LIMIT_OFF" ]]; then
-    echo "offline pack $APP_BYTES exceeds 520e6" >&2
+    echo "offline/bundled pack $APP_BYTES exceeds 520e6" >&2
     exit 1
   fi
-  echo "offline limit 520MB: PASS ($APP_BYTES)"
+  echo "bundled GGUF limit 520MB: PASS ($APP_BYTES)"
+  if [[ ! -f "$APP/Contents/Resources/models/$NAME" ]]; then
+    echo "missing bundled model in Resources/models/" >&2
+    exit 1
+  fi
 fi
 
 if [[ "$DO_ZIP" -eq 1 ]]; then
-  if [[ "$OFFLINE" -eq 1 ]]; then
-    ZIP="$OUT_ROOT/LensTrans-macos-offline.zip"
-  else
+  if [[ "$BUNDLE_GGUF" -eq 1 ]]; then
     ZIP="$OUT_ROOT/LensTrans-macos.zip"
+  else
+    ZIP="$OUT_ROOT/LensTrans-macos-base.zip"
   fi
   rm -f "$ZIP"
   (cd "$OUT_ROOT" && zip -qry "$(basename "$ZIP")" LensTrans.app)
@@ -228,16 +250,17 @@ mkdir -p "$(dirname "$REPORT")"
   echo "# macOS installer size"
   echo ""
   echo "- date: $(date -u +%Y-%m-%dT%H:%MZ)"
-  echo "- track: $([[ "$OFFLINE" -eq 1 ]] && echo offline || echo base)"
+  echo "- track: $([[ "$BUNDLE_GGUF" -eq 1 ]] && echo bundled-gguf || echo base)"
   echo "- app: \`$APP\`"
   echo "- binary_bytes: $BIN_BYTES"
   echo "- app_approx_bytes: $APP_BYTES"
-  echo "- GGUF in bundle: $([[ "$OFFLINE" -eq 1 ]] && echo yes || echo no)"
+  echo "- GGUF in bundle: $([[ "$BUNDLE_GGUF" -eq 1 ]] && echo yes || echo no)"
+  echo "- in-process Metal Frameworks: $([[ -f "$APP/Contents/Frameworks/libllama.dylib" ]] && echo yes || echo no)"
   echo "- Developer ID / notarization: not performed (script reserved --sign)"
 } > "$REPORT"
 echo "wrote $REPORT"
 
 echo "RESULT=PASS"
-echo "install: bash tools/pack/install-mac.sh$([[ "$OFFLINE" -eq 1 ]] && echo ' --offline' || true)"
+echo "install: bash tools/pack/install-mac.sh$([[ "$BUNDLE_GGUF" -eq 0 ]] && echo ' --base' || true)"
 echo "run:     bash tools/run/run-mac.sh"
 echo "e2e:     \"$APP/Contents/MacOS/LensTrans\" --e2e --e2e-sec 8 --no-onboard"

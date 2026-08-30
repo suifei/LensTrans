@@ -38,4 +38,8 @@ HF is only a last-resort inside `fetch-gguf.sh` (via local proxy `127.0.0.1:8080
 
 Verify size and hash before running. The model LICENSE copy used for product review lives in `tools/eval/licenses/`.
 
+**Packaging:** `bash tools/pack/pack-mac.sh` copies this file into
+`LensTrans.app/Contents/Resources/models/` (default track, ≤520 MB). The GGUF itself stays
+gitignored — only the pack script stages it from `models/` or Application Support.
+
 Offline Mac pack embeds this file under `LensTrans.app/Contents/Resources/models/` via `bash tools/pack/pack-mac.sh --offline` (not committed to git).

@@ -1,23 +1,25 @@
 #!/usr/bin/env bash
 # Install staged LensTrans.app to /Applications or ~/Applications.
 # Usage:
-#   bash tools/pack/install-mac.sh              # base: dist/macos/LensTrans.app
-#   bash tools/pack/install-mac.sh --offline    # offline pack (may contain GGUF)
+#   bash tools/pack/install-mac.sh              # default: dist/macos/ (bundled GGUF)
+#   bash tools/pack/install-mac.sh --offline    # alias of default
+#   bash tools/pack/install-mac.sh --base       # slim pack dist/macos-base/ (no GGUF)
 #   bash tools/pack/install-mac.sh --user       # ~/Applications
-# Does not notarize. Base track refuses GGUF in the source tree.
+# Does not notarize.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-OFFLINE=0
+TRACK=bundled  # bundled | base
 USER_ONLY=0
 SRC=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --user) USER_ONLY=1 ;;
-    --offline) OFFLINE=1 ;;
+    --offline) TRACK=bundled ;;
+    --base) TRACK=base ;;
     -h|--help)
-      sed -n '2,9p' "$0"
+      sed -n '2,10p' "$0"
       exit 0
       ;;
     *)
@@ -29,21 +31,26 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$SRC" ]]; then
-  if [[ "$OFFLINE" -eq 1 ]]; then
-    SRC="$ROOT/dist/macos-offline/LensTrans.app"
+  if [[ "$TRACK" == "base" ]]; then
+    SRC="$ROOT/dist/macos-base/LensTrans.app"
   else
-    SRC="${SRC:-$ROOT/dist/macos/LensTrans.app}"
+    # Prefer current default; accept legacy macos-offline path.
+    if [[ -d "$ROOT/dist/macos/LensTrans.app" ]]; then
+      SRC="$ROOT/dist/macos/LensTrans.app"
+    else
+      SRC="$ROOT/dist/macos-offline/LensTrans.app"
+    fi
   fi
 fi
 
 if [[ ! -d "$SRC" ]]; then
-  echo "missing $SRC — run: bash tools/pack/pack-mac.sh$([[ "$OFFLINE" -eq 1 ]] && echo ' --offline')" >&2
+  echo "missing $SRC — run: bash tools/pack/pack-mac.sh$([[ "$TRACK" == base ]] && echo ' --base' || true)" >&2
   exit 1
 fi
 
-if [[ "$OFFLINE" -eq 0 ]]; then
+if [[ "$TRACK" == "base" ]]; then
   if find "$SRC" -name '*.gguf' | grep -q .; then
-    echo "refusing to install base track that contains GGUF (use --offline)" >&2
+    echo "refusing to install --base track that contains GGUF" >&2
     exit 1
   fi
 fi
