@@ -3,128 +3,197 @@
 [English](README.md) · [简体中文](README.zh-CN.md) · **日本語** · [한국어](README.ko.md)
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D4?logo=windows&logoColor=white)](#macos)
-[![macOS](https://img.shields.io/badge/macOS-stubs-lightgrey?logo=apple)](#macos)
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D4?logo=windows&logoColor=white)](#対応環境)
+[![macOS](https://img.shields.io/badge/macOS-API%20stubs-lightgrey?logo=apple)](#対応環境)
 [![C++](https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus)](CMakeLists.txt)
+[![UI](https://img.shields.io/badge/shell-Win32%20native-informational)](#何をするものか)
 [![Engine](https://img.shields.io/badge/local-Qwen2.5--0.5B%20GGUF-orange)](#機能)
 
-Windows 向けのネイティブなリアルタイム画面翻訳です。画面上にクリック透過の枠を置き、Windows Graphics Capture（WGC）で画素を取り、システム OCR で読み、ローカル Qwen2.5-0.5B または自分で設定した OpenAI 互換エンドポイントで訳し、没入塗りまたはステッカーで原文を覆います。別ウィンドウに結果を出す方式ではありません。Electron / Tauri は使いません。
+**Windows ネイティブのリアルタイム画面翻訳。** 任意のウィンドウの上に、レイヤードでクリック透過できる枠を置きます。Windows Graphics Capture（WGC）で画素を取り込み、システムの OCR で読み、ローカルの Qwen2.5-0.5B、または自分で書いた OpenAI 互換エンドポイントで訳し、没入塗りかステッカーで原文を覆います。Electron も Tauri も WebView シェルも使いません。
 
-## ポップアップ型との違い
+## 何をするものか
 
-多くの画面翻訳は画像を切り出して結果ウィンドウを開きます。LensTrans は **領域指定・常時・その場で覆う** 方式です。
+画面上の文字はピクセルであって、DOM ではありません。LensTrans はフックを仕込みませんし、他プロセスの私有メモリも読みません。自分の枠の中だけを撮り、文字を認識し、同じ矩形の上に訳を描きます。
 
-| | ポップアップ型 | LensTrans |
+```
+  ┌─ 対象ウィンドウ ─────────────────────────────────────┐
+  │  File   Edit   View                                  │
+  │                                                      │
+  │    ┌─ LensTrans 枠（Watching、クリック透過）──────┐  │
+  │    │                                              │  │
+  │    │   Settings          →    设置                │  │
+  │    │   Cancel            →    取消                │  │
+  │    │   Please wait…      →    请稍等              │  │
+  │    │                                              │  │
+  │    └──────────────────────────────────────────────┘  │
+  └──────────────────────────────────────────────────────┘
+         トレイ  ·  Ctrl+E 編集 / 透過  ·  Esc 終了
+```
+
+枠は `WS_POPUP` のレイヤード HWND（`WS_EX_LAYERED | TOPMOST | TOOLWINDOW`）で、タスクバーには出しません。**Watching** では `WS_EX_TRANSPARENT` を立て、クリックは下のウィンドウへ抜けます。**Editing** では透過を外し、タイトルバーのドラッグと八方向 12px ハンドルでリサイズできます。複数枠に対応し、枠ごとにステートマシンを持ちます。
+
+```
+Hidden → Editing → Watching ⇄ Translating
+              Paused ← どの状態からでも（ホットキー。キャプチャは止め、オーバーレイは最後のフレームを残す）
+```
+
+表示は二通りだけを正直な実装とします。背景の最頻色で矩形を塗り潰して訳を書く（没入）、あるいは不透明なステッカーで原文を隠す。原文が残ったまま半透明の訳を重ねるのは禁止です。対照モードはステッカーの下に 60% サイズの原文を置くのであって、重ね打ちではありません。字色が塗りに対して WCAG AA 4.5:1 を下回るときは、字色を塗りの反転色に切り替えます。
+
+リポジトリに製品スクリーンショットはありません。上は構造の図示で、存在しない画像 URL を貼らないためです。
+
+よくある画面翻訳は「ビットマップを撮って、別ウィンドウに結果を出す」方式です。LensTrans は **枠をピン留めし、画素の変化に追従し、原文を覆う** 側です。
+
+| | よくあるポップアップ型 | LensTrans |
 | --- | --- | --- |
-| 位置 | 原文から離れた別窓 | 選んだ領域に固定した透明枠 |
-| タイミング | ホットキーで一枚 | 枠内の画素が変われば訳す |
-| オフライン | 多くは通信前提 | 既定はローカル Qwen2.5-0.5B |
-| 見え方 | 原文と訳が同時に見える | **塗りつぶし（immersive）か帯（sticker）で原文を隠す。重ね書き禁止** |
-
-半透明の訳を原文の上に載せません。背景を塗ってから訳を書くか、不透明な帯で原文を隠します。対照表示は原文を小さくしコントラストを確保するのであって、二行を重ねません。
-
-## 画面（リポジトリに製品スクショはありません）
-
-git には製品スクリーンショットを入れていません。実行時のイメージは次のとおりです。
-
-```
-  ┌─ ブラウザ / ゲーム / PDF ─────────────────────────────┐
-  │                                                       │
-  │    ┌ LensTrans 枠 ─────────────────────────────────┐  │
-  │    │ ████ 原文を覆う塗り                             │  │
-  │    │ お待ちください                                  │  │
-  │    │ （immersive または sticker。文字は重ねない）      │  │
-  │    └───────────────────────────────────────────────┘  │
-  │                                                       │
-  └───────────────────────────────────────────────────────┘
-       Watching 中は下の窓へクリック透過    Ctrl+E で枠を編集
-```
-
-実物は `build\Release\lenstrans_overlay.exe` をビルドして確認してください。
+| 位置 | 原文から離れた別窓 | 自分で描いた画素に枠が貼り付く |
+| タイミング | ホットキーで一枚切り | 枠内が変われば更新 |
+| オフライン | ネット前提が多い | 既定はローカル Qwen2.5-0.5B |
+| 見た目 | 原文と訳が同時に見える | 没入塗りまたはステッカーで原文を **覆う** |
 
 ## 機能
 
-- **複数枠:** `Ctrl+Shift+L` で領域を追加。枠ごとにキャプチャ / OCR / 翻訳。
-- **キャプチャ:** `Windows.Graphics.Capture`。失敗時は GDI `BitBlt` / `PrintWindow`。フレーム差分（1/4 + 8×8 SSD）。静止後はスリープ。
-- **OCR:** `Windows.Media.OCR` → 共通 `OcrBlock`。2 フレーム安定 + 300 ms デバウンス。
-- **翻訳:** ローカル **Qwen2.5-0.5B Instruct Q4_K_M**（Apache-2.0）。任意で OpenAI 互換クラウド。
-- **描画:** immersive / sticker / 対照。塗りに対するコントラストが不足すれば文字色を反転。
-- **トレイと設定:** トレイ一式、設定 5 タブ、初回 3 ステップ案内。
-- **秘密情報:** クラウド API キーは DPAPI。平文の設定ファイルには書きません。
+| 領域 | Windows 上で実際に動くもの |
+| --- | --- |
+| オーバーレイ | 複数枠、最前面、編集 / クリック透過、トレイ一式 |
+| キャプチャ | WGC（ウィンドウセッション / モニタ切り出し）。失敗時は GDI `BitBlt` / `PrintWindow` |
+| フレーム差 | 1/4 ダウンサンプル + 8×8 SSD。DIFF なし約 2 秒で休眠し、空転で CPU を食わない |
+| OCR | `Windows.Media.OCR` を STA スレッドで実行 → 共通 `OcrBlock`（テキスト、bbox、サンプリング色） |
+| 安定化 | bbox+text が一致する連続 2 フレームに、300 ms デバウンスを足してから翻訳へ渡す |
+| 表示 | 没入置換 / ステッカー（既定は約 92% 不透明）/ ステッカー+対照。半透明の重ね書きは禁止 |
+| ローカル翻訳 | Qwen2.5-0.5B Instruct Q4_K_M、[llama.cpp](https://github.com/ggml-org/llama.cpp) **b10688**（プロセス内リンクまたは `llama-cli`） |
+| クラウド翻訳 | WinHTTP `POST {base}/chat/completions`。Base URL / Model / API Key は **すべて空**。空なら無効 |
+| 鍵 | DPAPI でディスクへ。設定のシリアライズに `api_key` を出さない（単体テストあり） |
+| UI | 設定 5 タブ、初回 3 ステップ案内（案内中は WGC を起こさない） |
+| ホットキー | `Ctrl+E` 編集/透過 · `Ctrl+Shift+L` 新規枠 · `Ctrl+T` 一時停止 · `Ctrl+Shift+H` 全隠 · `Ctrl+,` 設定 |
 
-対象市場に **EU / UK / KR** を含みます。ローカル既定は再配布可能な Qwen（Apache-2.0）です。これらの地域を除外するコミュニティライセンスのモデルは使いません。
+## クイックスタート
 
-## インストール
+環境: Windows 10 21H2+ または Windows 11、x64、Visual Studio 2022、Windows 10/11 SDK。
 
-このリポジトリは**ソース**です。配布は二系統で、どちらか一方の製品ではありません。
+1. 本リポジトリを clone。[ビルド](#ビルド) に従い llama.cpp **b10688** を取り、[models/README.md](models/README.md) に従い GGUF を置く。
+2. `lenstrans_overlay` をビルドし、`build\Release\lenstrans_overlay.exe` を実行する。
+3. 画面収録の許可が出たら許可する。英語 UI に枠を置く。`Ctrl+E` で透過に切り替えてから下の窓をクリックする。
+4. クラウドを使う場合は設定を開き、**自分の** Base URL・モデル名・Key だけを書く。ソースにゲートウェイは同梱しない。
 
-| パッケージ | 内容 | 上限 |
-| --- | --- | --- |
-| **基本** | ランタイム（exe + llama/ggml DLL）。**GGUF なし** | **≤30 MB** |
-| **完全オフライン** | 基本 + 同じ公式 Q4_K_M | **≤520 MB**（重み約 491 MB、残りはインストーラ） |
+スクリプトによる zip（Inno / NSIS / ストア署名パッケージではない）は [docs/installer.md](docs/installer.md)。本ツリーに本番署名済み MSIX はありません。
 
-実行時ピークは **Working Set ≤550 MB**（マップした重みを含む。Private Bytes では判定しない）。
+## ビルド
 
-- ネットワークが無い場合は完全オフラインパック。
-- オンライン時の製品方針: 基本パックのあと、初回案内でローカルモデルの利用/取得が既定（レジューム + SHA-256 検証後に確定）。この git リポジトリは約 491 MB の GGUF を**置きません**。
-- ソースから実行する場合: 公式ファイルを `models\qwen2.5-0.5b-instruct-q4_k_m.gguf` に置く。手順は [models/README.md](models/README.md)。
-
-梱包（先に Release ビルド）:
-
-```powershell
-powershell -File tools/pack/pack-windows.ps1
-powershell -File tools/pack/pack-windows.ps1 -Offline
-powershell -File tools/pack/install-windows.ps1
-```
-
-サイズ検査は [docs/installer.md](docs/installer.md)。VC++ / Universal CRT はシステム依存とし、基本パックには入れません。
-
-## ソースからのビルド（Windows）
-
-**Visual Studio 2022**、Windows 10 SDK、CMake ≥ 3.24、x64。
-
-1. [third_party/README.md](third_party/README.md) に従い `llama.cpp` **b10688** を取得してビルドする。このリポジトリはそのツリーもビルド成果も含みません。
-2. 上記の公式 GGUF を置く。または先に llama 非リンクでテストだけビルドする。
-
-```powershell
+```bat
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release --target lenstrans_test lenstrans_overlay
 .\build\Release\lenstrans_test.exe
 .\build\Release\lenstrans_overlay.exe
 ```
 
-プロセス内ローカルエンジン: 事前ビルドの `llama.lib` があれば CMake が `LENSTRANS_WITH_LLAMA` を有効にします。ライブラリが無いのに無理にオンにしないでください。
+オーバーレイ内のローカルエンジンには、プロセス内の llama.cpp が必要です。
 
-画面収録の許可を求められたら許可してください。Watching のキャプチャは WGC です。案内ウィンドウは探査のためにキャプチャセッションを**開始しません**。
+```bat
+git clone --depth 1 --branch b10688 https://github.com/ggml-org/llama.cpp.git third_party\llama.cpp
+```
 
-## ホットキー
+llama.cpp を **Release x64** でビルドしてから LensTrans を再構成します。CMake は `third_party/llama.cpp/build/src/Release/llama.lib` を見つけると `LENSTRANS_WITH_LLAMA=ON` を立てます。ピン留めの詳細は [third_party/README.md](third_party/README.md)。
 
-| キー | 動作 |
+```
+tag:    b10688
+commit: c589f0ed10c643678c4707dd160c21ac7633ebc0
+remote: https://github.com/ggml-org/llama.cpp.git
+```
+
+Ninja + MSVC でも構いません。vcpkg を足さないでください。UI をクロスプラットフォームのシェルに差し替えないでください。
+
+### テスト
+
+| ターゲット | 役割 |
 | --- | --- |
-| `Ctrl+E` | 枠の編集 / クリック透過（Watching 中は下の窓がヒット） |
-| `Ctrl+Shift+L` | 翻訳枠を追加 |
-| `Ctrl+T` | 一時停止 / 再開 |
-| `Ctrl+Shift+H` | 全枠の表示 / 非表示 |
-| `Ctrl+,` | 設定 |
-| `Esc` | 終了 |
+| `lenstrans_test` | コア: キャッシュ、ルータ、表示、設定。注入フレームの全経路（WGC なし） |
+| `lenstrans_test_hotkey` | 既定の四キー `RegisterHotKey` |
+| `lenstrans_test_llama` | 任意。GGUF が必要（`--quality-10` / `--quality-30` / `--flores50`） |
+| `lenstrans_e2e_target` | overlay スクリプト用の独立 HWND（白地 `HELLO Settings`） |
+| `lenstrans_wgc_probe` | WGC 権限 + OCR スモーク |
 
-トレイも同じ操作です。キーは設定で変更できます。
+`tools/eval/*.ps1` は受け入れ用スクリプトで、報告は `tools/eval/out/` に書き（gitignore 済み）、説明は [tests/README.md](tests/README.md) にあります。
+
+### パッケージ
+
+```bat
+powershell -File tools\pack\pack-windows.ps1
+powershell -File tools\pack\pack-windows.ps1 -Offline
+powershell -File tools\pack\install-windows.ps1
+```
+
+基本パックに GGUF は入りません。オフラインパックは基本パック + `models/*.gguf`。上限を超えるとスクリプトは失敗します。インストール先の既定は `%LOCALAPPDATA%\LensTrans\app`。鍵は書きません。GGUF をコピーするのはオフラインパックを作ったときだけです。
+
+## サイズとメモリ（確定した予算）
+
+製品の拘束条件であって、キャッチコピーではありません。受け入れは **Working Set（WS）** で見ます。Private Bytes を「ピークメモリ」として報告しません。
+
+| 項目 | 上限 | 説明 |
+| --- | --- | --- |
+| 基本パック | **≤ 30 MB** | overlay + llama/ggml DLL。**GGUF なし** |
+| 完全オフライン | **≤ 520 MB** | 基本 + 公式 Q4_K_M（約 491 MB）+ インストーラ余白 |
+| 推論ピーク | **WS ≤ 550 MB** | GGUF のファイルマップを含む |
+| ローカル常駐 | ≤ 600 MB（典型は約 520 MB） | Q4_K_M をロックしたあとの物理的な帰結 |
+| 主プロセス（重みなし） | ≤ 80 MB | ウェイト未ロード |
+| クラウド常駐 | ≤ 120 MB | クラウドエンジンのみ |
+| ≤100 文字ブロックの初トークン | ≤ 800 ms | 現代的な CPU、ウォーム、greedy。対外 SLO ではない |
+
+手元ではスクリプト基本ツリーが約 **4.5 MB**（zip 約 1.8 MB）、オフライン合計約 **496 MB** で、いずれも上限内でした。単機の成果物です。ツールチェーンで数字は変わりますが、予算は変わりません。
+
+既定の重み: `qwen2.5-0.5b-instruct-q4_k_m.gguf`、491400032 バイト、SHA256 `74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db`。入手手順は [models/README.md](models/README.md)。これを選んだ理由は **Apache-2.0 が EU/UK/KR を含む再配布を許す** からであって、0.5B が専任の機械翻訳に達しているからではありません。
 
 ## プライバシー
 
-- **既定はオフライン。** ローカルエンジンは画面上の文字を第三者へ送りません。
-- **クラウドのゲートウェイは空。** Base URL / API キー / Model は未入力が初期値です。ソースに公開中継 URL はありません。「接続テスト」だけ用意しています。
-- キーは DPAPI。`.env`、証明書、pfx は git に入りません。
-- キャプチャは自分で描いた枠の中だけです。
+- **既定はローカル。** 画素はこのマシンから出ません。OCR はシステムのエンジン、翻訳は手元の llama.cpp と自分で置いた GGUF です。
+- **クラウドのゲートウェイは空。** ソースに既定の Base URL、サンプル Key、内蔵中継はありません。三項目が揃うまでクラウドは無効です。別に「接続テスト」があります。
+- API Key は **DPAPI** だけ。平文の設定ファイルには入りません。
+- キャプチャはシステム API だけです。注入はせず、他プロセスの私有メモリも読みません。
+- git が止めるもの: `*.gguf`、`*.pfx`、`dist/*.cer`、`third_party/llama.cpp` 一式、`build/`、`.cache/`、`.env`、鍵類。push しないでください。
 
-## License
+## 対応環境
 
-[MIT](LICENSE) © 2026 flynn (suifei)。既定のローカル重み Qwen2.5-0.5B Instruct は **Apache-2.0**（Alibaba Cloud）。`llama.cpp` は上流のライセンスに従います。
+| | 状態 |
+| --- | --- |
+| **Windows 10/11 x64** | C++20 + Win32。これが製品本体です。 |
+| **macOS** | `mac/` は Swift AppKit の **インターフェーススタブ**。[mac/UNIMPLEMENTED.md](mac/UNIMPLEMENTED.md) を見てください。ScreenCaptureKit / Vision / Metal は未配線。本リポジトリに Xcode プロジェクトはありません。Windows を先に仕上げます。 |
 
-## macOS
+## 制限（先に読んでください）
 
-**同等実装ではありません。** `mac/` は Swift のインターフェース骨格です。Windows 上ではビルドせず、完成アプリでもありません。[mac/UNIMPLEMENTED.md](mac/UNIMPLEMENTED.md) を見てください。
+- 既定のローカルモデルは **0.5B** です。短い UI 文はしばしば使えます。長文や慣用句は直訳や語順崩れになりがちです。容量の限界であって、「プロンプトをいじれば専任 MT になる」話ではありません。正式な FLORES / COMET 受け入れはまだ開いています。
+- 本リポジトリに本番 / ストアのコード署名はありません。`tools/pack/pack-msix.ps1` の test-sign は手元だけ。証明書は入れません。
+- macOS は配布物ではありません。
+- Hunyuan / HY-MT のコミュニティライセンスは EU/UK/KR を除外します。**既定エンジンにはしません**し、インストーラにも入れません。
+
+## ディレクトリ
+
+```
+core/           共有 C++: OcrBlock、フレーム差、ローカル/クラウドエンジン、表示、パイプライン、設定
+win/            overlay、WGC キャプチャ、WinRT OCR、トレイと設定、DPAPI
+mac/            Swift スタブ（Windows 上ではコンパイルしない）
+tests/          単体、e2e フィクスチャ、WGC プローブ
+tools/pack/     zip / MSIX スクリプト
+tools/eval/     プローブと品質スクリプト（out/ はリポジトリに入れない）
+docs/           インストーラ説明と M0 文書
+models/         GGUF を置く（重みはリポジトリに入れない）
+third_party/    llama.cpp b10688 を自分で clone（ツリーはリポジトリに入れない）
+```
+
+モジュール表と厳しい制約: [docs/M0-poc-structure.md](docs/M0-poc-structure.md)。モデル許諾と評価計画: [docs/M0-model-eval.md](docs/M0-model-eval.md)。
+
+## ライセンス
+
+[MIT](LICENSE) © 2026 flynn (suifei)。
+
+任意の Qwen2.5-0.5B GGUF は **Apache-2.0**（Alibaba Cloud）です。重みを再配布するときはその許諾を添えてください。照合用コピー: `tools/eval/licenses/`。llama.cpp は上流のライセンスに従います。公式リポジトリから clone してください。
 
 ## 貢献
 
-Win32 / AppKit を維持してください。Electron / Tauri を入れない。クラウドの既定ホストや Key を追加しない。`*.gguf` / `*.pfx` / `third_party/llama.cpp` / `build/` をコミットしない。`core/` を触る前に `lenstrans_test` を通す。
+「ネイティブ Windows の画面翻訳」に沿った issue と PR を歓迎します。
+
+- UI は Win32 / AppKit のまま。Electron、Tauri、Qt、Flutter、WebView をシェルにしないでください。
+- 既定のクラウドホスト、サンプル API Key、ゲートウェイ定数を足さないでください。
+- `*.gguf`、`*.pfx`、`dist/*.cer`、`third_party/llama.cpp`、`build/`、`.cache/`、秘密情報をコミットしないでください。
+- 表示経路で「原文がまだ見えるのに半透明の訳が重なる」状態は回帰です。
+- `core/` を触ったら先に `lenstrans_test` を通してください。
+
+評価の途中で llama.cpp の commit を上げないでください。ロックは [third_party/README.md](third_party/README.md)。

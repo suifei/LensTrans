@@ -1,127 +1,199 @@
 # LensTrans
 
-**中文** · [English](docs/readme/README.en.md) · [日本語](docs/readme/README.ja.md) · [한국어](docs/readme/README.ko.md)
+**English** · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
 
-Windows 原生实时屏幕翻译器：在屏幕上划一块透明框，框内原文被译文盖住，而不是再弹一个窗口。默认走本机 Qwen2.5-0.5B；可选自行填写的 OpenAI 兼容接口。不用 Electron，不用 Tauri。
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D4?logo=windows&logoColor=white)](#platform)
+[![macOS](https://img.shields.io/badge/macOS-API%20stubs-lightgrey?logo=apple)](#platform)
+[![C++](https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus)](CMakeLists.txt)
+[![UI](https://img.shields.io/badge/shell-Win32%20native-informational)](#what-it-is)
+[![Engine](https://img.shields.io/badge/local-Qwen2.5--0.5B%20GGUF-orange)](#features)
 
-## 和弹窗翻译差在哪
+A **native Windows live screen translator**. Draw a layered, click-through box over any window; LensTrans captures pixels with Windows Graphics Capture (WGC), reads them with system OCR, translates locally (Qwen2.5-0.5B) or through a **user-supplied** OpenAI-compatible endpoint, and covers the source with immersive fill or a sticker. No Electron, no Tauri, no WebView shell.
 
-多数屏幕翻译是「截一块 → 弹窗出译文」。LensTrans 把翻译留在原文位置。
+## What it is
 
-| | 弹窗工具 | LensTrans |
+On-screen text is pixels, not a DOM. LensTrans does not inject hooks or read another process's private memory. It captures only the pixels inside its own boxes, OCRs them, and paints the translation on the same rectangle.
+
+```
+  ┌─ other app ──────────────────────────────────────────┐
+  │  File   Edit   View                                  │
+  │                                                      │
+  │    ┌─ LensTrans box (Watching, click-through) ────┐  │
+  │    │                                              │  │
+  │    │   Settings          →    设置                │  │
+  │    │   Cancel            →    取消                │  │
+  │    │   Please wait…      →    请稍等              │  │
+  │    │                                              │  │
+  │    └──────────────────────────────────────────────┘  │
+  └──────────────────────────────────────────────────────┘
+         tray  ·  Ctrl+E edit / passthrough  ·  Esc quit
+```
+
+The box is a `WS_POPUP` layered HWND (`WS_EX_LAYERED | TOPMOST | TOOLWINDOW`) with no taskbar entry. In **Watching** it sets `WS_EX_TRANSPARENT` so clicks reach the window underneath. In **Editing** it clears passthrough; you drag the title bar and resize with eight 12 px handles. Multiple boxes are supported, each with its own state machine:
+
+```
+Hidden → Editing → Watching ⇄ Translating
+              Paused ← any state (hotkey; capture stops, overlay keeps the last frame)
+```
+
+Presentation is two honest modes: fill the glyph rectangle with the sampled background majority color and write the translation (immersive), or cover the source with an opaque sticker. Semi-transparent ghost text on top of the original is a bug. Contrast mode is a sticker plus the source at 60% size underneath — not stacked glyphs. If the glyph color fails WCAG AA 4.5:1 against the fill, it is inverted against that fill.
+
+There are no product screenshots in this repository. The diagram above is structural so we do not hang a fake image URL.
+
+Most screen translators grab a bitmap and open a **separate result window**. LensTrans stays on the region: **pin the box, follow the pixels, cover the source**.
+
+| | Typical popup tool | LensTrans |
 | --- | --- | --- |
-| 范围 | 整屏或一次截图 | 一块或多块可调框，只译框内 |
-| 节奏 | 点一下译一次 | 帧差触发，画面停住就休眠 |
-| 呈现 | 另开窗口 | 框内沉浸填充，或贴一条盖住原文 |
-| 叠字 | 常见半透明叠在原文上 | **禁止**：必须盖住原文，不能原文译文同时可见 |
-| 离线 | 多半要联网 | 默认本地 GGUF；没填云端就不发请求 |
-| 运行时 | 常见 Web 壳 | Win32 + C++20 |
+| Where | A second window, away from the source | A frame pinned to the pixels you drew |
+| When | One-shot hotkey | Updates as the box contents change |
+| Offline | Often needs the network | Default local Qwen2.5-0.5B |
+| How it looks | Source and translation both visible | Immersive fill or a sticker **covering** the source |
 
-macOS 只有接口骨架，**未对等实现**，见 [mac/UNIMPLEMENTED.md](mac/UNIMPLEMENTED.md)。
+## Features
 
-## 界面
+| Area | What ships on Windows |
+| --- | --- |
+| Overlay | Multi-box, topmost, edit / click-through, full tray menu |
+| Capture | WGC (window session / monitor crop); GDI `BitBlt` / `PrintWindow` fallback |
+| Change detect | 1/4 downsample + 8×8 SSD; idle sleep after ~2 s of no DIFF so CPU does not spin |
+| OCR | `Windows.Media.OCR` on an STA thread → unified `OcrBlock` (text, bbox, sampled color) |
+| Stabilize | Two matching frames (bbox+text) plus 300 ms debounce before commit |
+| Present | Immersive replace / sticker (~92% opaque) / sticker + contrast. Pure transparent overlay text is forbidden |
+| Local engine | Qwen2.5-0.5B Instruct Q4_K_M via [llama.cpp](https://github.com/ggml-org/llama.cpp) **b10688** (in-process link or `llama-cli`) |
+| Cloud engine | WinHTTP `POST {base}/chat/completions`. Base URL / model / API key all **empty**; empty disables cloud |
+| Secrets | DPAPI on disk; settings serialization must not contain `api_key` (unit-tested) |
+| UI | 5-tab settings, 3-step first-run (does not start WGC during onboarding) |
+| Hotkeys | `Ctrl+E` edit/passthrough · `Ctrl+Shift+L` new box · `Ctrl+T` pause · `Ctrl+Shift+H` hide · `Ctrl+,` settings |
 
-仓库里没有产品截图，下面是 Watching 态的结构，不是假图链接。
+## Quick start
 
-```
-  目标窗口（浏览器 / 游戏 / PDF）
-  ┌──────────────────────────────────────────────┐
-  │                                              │
-  │   ┌─ 翻译框 ─────────────────────────────┐   │
-  │   │ ████████  请稍等                      │   │
-  │   │ ████████  （填充或贴条盖住原文）        │   │
-  │   └──────────────────────────────────────┘   │
-  │                                              │
-  └──────────────────────────────────────────────┘
-        Watching：点击穿透    Ctrl+E：改框
-```
+Requires Windows 10 21H2+ or Windows 11, x64, Visual Studio 2022, and a Windows 10/11 SDK.
 
-- **沉浸**：用底色填原文区域，只画译文。
-- **贴条**：一条不透明带压在原文上。
-- **对照**：贴条 + 缩小的原文，仍盖住原位置，不是叠一层半透明字。
+1. Clone this repo. Fetch llama.cpp **b10688** per [Build](#build), and the GGUF per [models/README.md](models/README.md).
+2. Build `lenstrans_overlay` and run `build\Release\lenstrans_overlay.exe`.
+3. Allow **screen recording** if Windows asks. Draw a box over English UI. `Ctrl+E` to click through to the window underneath.
+4. Optional cloud: open Settings and paste *your* Base URL, model id, and key. Nothing is pre-filled.
 
-## 功能
+A scripted zip (not Inno / NSIS / a store-signed package) is documented in [docs/installer.md](docs/installer.md). There is no production-signed MSIX in this tree.
 
-- 多框：`Ctrl+Shift+L` 再开一块；各框自己的捕获 / OCR / 翻译。
-- 捕获：Windows.Graphics.Capture；失败则 GDI BitBlt / PrintWindow。
-- OCR：Windows.Media.OCR，变化块并上旧文本邻域；连续两帧稳定后再译。
-- 本地引擎：llama.cpp **b10688**，Qwen2.5-0.5B Instruct Q4_K_M。推理峰值 Working Set **≤550MB**。
-- 云端：OpenAI 兼容 HTTP。Base URL、API Key、Model **全空**，只提供「测试连接」。Key 走 DPAPI。
-- 托盘菜单、五页设置、640×420 三步引导。引导默认勾选「使用本地模型」。
+## Build
 
-## 安装
-
-本仓库是源码。安装包按两条轨道打包，**不是**二选一产品。
-
-| 轨道 | 内容 | 上限（十进制） |
-| --- | --- | --- |
-| 基础包 | `lenstrans_overlay.exe` + llama/ggml DLL，**不含** GGUF | **≤30MB** |
-| 完整离线包 | 基础包 + 官方 Q4_K_M | **≤520MB**（权重约 491MB，余量给安装器） |
-
-基础包打好后，本地模型有两种来源：把官方 GGUF 放到 `models/`，或直接用离线包。引导里「使用本地模型」默认勾选；权重文件不进 Git。
-
-```
-powershell -File tools/pack/pack-windows.ps1
-powershell -File tools/pack/pack-windows.ps1 -Offline
-powershell -File tools/pack/install-windows.ps1
-```
-
-说明见 [docs/installer.md](docs/installer.md)。VC++ / UCRT 当系统依赖，不打进基础包。
-
-默认权重：`qwen2.5-0.5b-instruct-q4_k_m.gguf`（491400032 字节），来自官方 [`Qwen/Qwen2.5-0.5B-Instruct-GGUF`](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF)，Apache-2.0。SHA256：`74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db`。放在 [`models/`](models/README.md)。
-
-目标市场含 **EU / UK / KR**，因此默认模型必须是可再分发的 Apache-2.0。Hunyuan / HY-MT 社区协议排除这些地区，不能当默认引擎。
-
-## 从源码构建
-
-需要 Visual Studio 2022、Windows 10 SDK、CMake 3.24+、x64。
-
-1. 按 [third_party/README.md](third_party/README.md) 检出并编译 llama.cpp **b10688**（本仓库不收录该树）。
-2. 编译本项目：
-
-```
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DLENSTRANS_WITH_LLAMA=ON
+```bat
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release --target lenstrans_test lenstrans_overlay
 .\build\Release\lenstrans_test.exe
 .\build\Release\lenstrans_overlay.exe
 ```
 
-无 llama 预编译库时不要开 `LENSTRANS_WITH_LLAMA`，否则 CMake 会失败。测试说明：[tests/README.md](tests/README.md)。首次弹出屏幕录制权限时点允许。
+In-process llama.cpp (required for the local engine inside the overlay):
 
-## 热键
+```bat
+git clone --depth 1 --branch b10688 https://github.com/ggml-org/llama.cpp.git third_party\llama.cpp
+```
 
-| 热键 | 作用 |
+Build that tree **Release x64**, then reconfigure LensTrans. CMake turns on `LENSTRANS_WITH_LLAMA=ON` when it finds `third_party/llama.cpp/build/src/Release/llama.lib`. Pin details: [third_party/README.md](third_party/README.md).
+
+```
+tag:    b10688
+commit: c589f0ed10c643678c4707dd160c21ac7633ebc0
+remote: https://github.com/ggml-org/llama.cpp.git
+```
+
+Ninja + MSVC also works. Do not add vcpkg, and do not replace the UI with a cross-platform shell.
+
+### Tests
+
+| Target | Role |
 | --- | --- |
-| `Ctrl+E` | 编辑框 / 点击穿透 |
-| `Ctrl+Shift+L` | 新建翻译框 |
-| `Ctrl+T` | 暂停 / 继续 |
-| `Ctrl+Shift+H` | 显示或隐藏全部框 |
-| `Ctrl+,` | 设置 |
-| `Esc` | 退出 |
+| `lenstrans_test` | Core: cache, router, present, settings; injected-frame pipeline (no WGC) |
+| `lenstrans_test_hotkey` | Default four `RegisterHotKey` bindings |
+| `lenstrans_test_llama` | Optional; needs the GGUF (`--quality-10`, `--quality-30`, `--flores50`) |
+| `lenstrans_e2e_target` | Fixture HWND (white `HELLO Settings`) for overlay scripts |
+| `lenstrans_wgc_probe` | WGC permission + OCR smoke |
 
-设置里可改。Watching 态框不挡鼠标。
+PowerShell helpers live in `tools/eval/` (they write reports under `tools/eval/out/`, gitignored). See [tests/README.md](tests/README.md).
 
-## 隐私
+### Packaging
 
-- 默认本地推理。没填云端三项，进程不会为翻译去访问网络。
-- 源码不预填任何公共网关。
-- API Key 不进设置明文，只走 DPAPI。
-- 捕获只覆盖你划的框，需要系统「屏幕录制」授权。
+```bat
+powershell -File tools\pack\pack-windows.ps1
+powershell -File tools\pack\pack-windows.ps1 -Offline
+powershell -File tools\pack\install-windows.ps1
+```
 
-## 许可
+The base pack does not include the GGUF. The offline pack is base + `models/*.gguf`. The script fails if a size cap is exceeded. Install lands in `%LOCALAPPDATA%\LensTrans\app` by default; it does not write keys, and it does not copy a GGUF unless you built the offline pack.
 
-LensTrans 源码为 [MIT](LICENSE)，Copyright 2026 suifei。
+## Size and memory (product budgets)
 
-Qwen2.5-0.5B 权重是 Apache-2.0（Copyright 2024 Alibaba Cloud），与本仓库 MIT 相互独立。副本：[tools/eval/licenses/Qwen2.5-0.5B-Instruct-LICENSE.txt](tools/eval/licenses/Qwen2.5-0.5B-Instruct-LICENSE.txt)。
+These are the numbers the project is held to — not marketing claims. Acceptance uses **Working Set (WS)**, not Private Bytes reported as “peak memory”.
 
-## macOS
+| Budget | Limit | Notes |
+| --- | --- | --- |
+| Base pack | **≤ 30 MB** | Overlay + llama/ggml DLLs; **no** GGUF |
+| Offline pack | **≤ 520 MB** | Base + official Q4_K_M (~491 MB) + installer headroom |
+| Inference peak | **WS ≤ 550 MB** | Includes GGUF mmap |
+| Local idle resident | ≤ 600 MB (typical ~520 MB) | After the Q4_K_M lock-in |
+| Main process, no model | ≤ 80 MB | Overlay without weights |
+| Cloud resident | ≤ 120 MB | Cloud engine only |
+| First token (≤100 chars, warm, greedy) | ≤ 800 ms | Target on a modern CPU; not a published SLO |
 
-`mac/` 是 Swift 接口桩，本机 Windows **未编译、未对等**。不做 Electron / Tauri 壳。清单：[mac/UNIMPLEMENTED.md](mac/UNIMPLEMENTED.md)。
+A local measurement of the scripted base tree was about **4.5 MB** uncompressed / **1.8 MB** zip, offline total about **496 MB** — under the caps. That is one machine’s artifact; toolchains change the number, the budget does not.
 
-## 文档
+Default weights: `qwen2.5-0.5b-instruct-q4_k_m.gguf`, 491400032 bytes, SHA256 `74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db`. Download steps: [models/README.md](models/README.md). It is the default because **Apache-2.0 allows redistribution including EU/UK/KR**, not because 0.5B already matches a dedicated MT model.
 
-- [docs/installer.md](docs/installer.md) — 基础包 / 离线包
-- [docs/M0-poc-structure.md](docs/M0-poc-structure.md) — 捕获、浮层、管线
-- [docs/M0-model-eval.md](docs/M0-model-eval.md) — 模型与内存口径
-- [tests/README.md](tests/README.md) — 测试
-- [third_party/README.md](third_party/README.md) — llama.cpp b10688
+## Privacy
+
+- **Default path is local.** Pixels stay on the machine; OCR is `Windows.Media.OCR`; translation is llama.cpp + the GGUF you downloaded.
+- **No baked-in cloud gateway.** Source does not ship a default Base URL, model name, or API key. Cloud is off until all three fields are set, plus a “test connection” action.
+- The key is stored with **DPAPI**, not in the settings file. Settings serialization is tested to omit `api_key`.
+- Capture uses system APIs (WGC / GDI). No injection into other processes, no reading foreign private memory.
+- Git blocks `*.gguf`, `*.pfx`, `dist/*.cer`, the whole `third_party/llama.cpp` tree, `build/`, `.cache/`, `.env`, and secret-like files. Do not push them.
+
+## Platform
+
+| | Status |
+| --- | --- |
+| **Windows 10/11 x64** | Native C++20 + Win32. This is the product. |
+| **macOS** | Swift AppKit **interface stubs** under `mac/` — see [mac/UNIMPLEMENTED.md](mac/UNIMPLEMENTED.md). ScreenCaptureKit / Vision / Metal are not wired. No Xcode project in this repo. Windows is finished first. |
+
+## Limitations (read this)
+
+- The default local model is **0.5B**. Short UI strings often come out usable; long sentences and idioms frequently go literal or scramble. That is a capacity limit, not “tune the prompt and it becomes dedicated MT”. Formal FLORES / COMET acceptance is still open.
+- Production / Store code signing is not in this repository. The test-sign path in `tools/pack/pack-msix.ps1` stays on the local machine; certificates are not committed.
+- macOS is not a shipping build.
+- Hunyuan / HY-MT community licenses exclude EU/UK/KR. They are **not** the default engine and do not go into the installer.
+
+## Layout
+
+```
+core/           shared C++: OcrBlock, frame diff, local/cloud engines, present, pipeline, settings
+win/            overlay, WGC capture, WinRT OCR, tray/settings, DPAPI
+mac/            Swift stubs (not compiled on Windows)
+tests/          unit + e2e fixture + WGC probe
+tools/pack/     zip / MSIX scripts
+tools/eval/     probes and quality scripts (out/ gitignored)
+docs/           installer + M0 notes
+models/         GGUF goes here (weights gitignored)
+third_party/    clone llama.cpp b10688 here (tree gitignored)
+```
+
+Module map and hard constraints: [docs/M0-poc-structure.md](docs/M0-poc-structure.md). Model license and eval plan: [docs/M0-model-eval.md](docs/M0-model-eval.md).
+
+## License
+
+[MIT](LICENSE) © 2026 flynn (suifei).
+
+The optional Qwen2.5-0.5B GGUF is **Apache-2.0** (Alibaba Cloud). You must keep that license with any redistributed weights. Review copy: `tools/eval/licenses/`. llama.cpp has its own license; clone it from upstream.
+
+## Contributing
+
+Issues and PRs that match the native-Windows design are welcome.
+
+- Keep the UI on Win32 / AppKit. Do not introduce Electron, Tauri, Qt, Flutter, or WebView as the shell.
+- Do not add a default cloud host, sample API key, or gateway constant.
+- Do not commit `*.gguf`, `*.pfx`, `dist/*.cer`, `third_party/llama.cpp`, `build/`, `.cache/`, or secrets.
+- Present path: if the source is still visible under translucent translated glyphs, that is a regression.
+- Run `lenstrans_test` before sending a core change.
+
+Do not bump the llama.cpp commit mid-eval. The pin is in [third_party/README.md](third_party/README.md).
