@@ -1,6 +1,13 @@
 # LensTrans
 
-[中文](../../README.md) · [English](README.en.md) · **日本語** · [한국어](README.ko.md)
+[English](README.md) · [简体中文](README.zh-CN.md) · **日本語** · [한국어](README.ko.md)
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D4?logo=windows&logoColor=white)](#対応環境)
+[![macOS](https://img.shields.io/badge/macOS-API%20stubs-lightgrey?logo=apple)](#対応環境)
+[![C++](https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus)](CMakeLists.txt)
+[![UI](https://img.shields.io/badge/shell-Win32%20native-informational)](#何をするものか)
+[![Engine](https://img.shields.io/badge/local-Qwen2.5--0.5B%20GGUF-orange)](#機能)
 
 **Windows ネイティブのリアルタイム画面翻訳。** 任意のウィンドウの上に、レイヤードでクリック透過できる枠を置きます。Windows Graphics Capture（WGC）で画素を取り込み、システムの OCR で読み、ローカルの Qwen2.5-0.5B、または自分で書いた OpenAI 互換エンドポイントで訳し、没入塗りかステッカーで原文を覆います。Electron も Tauri も WebView シェルも使いません。
 
@@ -63,12 +70,12 @@ Hidden → Editing → Watching ⇄ Translating
 
 環境: Windows 10 21H2+ または Windows 11、x64、Visual Studio 2022、Windows 10/11 SDK。
 
-1. 本リポジトリを clone。[ビルド](#ビルド) に従い llama.cpp **b10688** を取り、[models/README.md](../../models/README.md) に従い GGUF を置く。
+1. 本リポジトリを clone。[ビルド](#ビルド) に従い llama.cpp **b10688** を取り、[models/README.md](models/README.md) に従い GGUF を置く。
 2. `lenstrans_overlay` をビルドし、`build\Release\lenstrans_overlay.exe` を実行する。
 3. 画面収録の許可が出たら許可する。英語 UI に枠を置く。`Ctrl+E` で透過に切り替えてから下の窓をクリックする。
 4. クラウドを使う場合は設定を開き、**自分の** Base URL・モデル名・Key だけを書く。ソースにゲートウェイは同梱しない。
 
-スクリプトによる zip（Inno / NSIS / ストア署名パッケージではない）は [docs/installer.md](../installer.md)。本ツリーに本番署名済み MSIX はありません。
+スクリプトによる zip（Inno / NSIS / ストア署名パッケージではない）は [docs/installer.md](docs/installer.md)。本ツリーに本番署名済み MSIX はありません。
 
 ## ビルド
 
@@ -85,7 +92,7 @@ cmake --build build --config Release --target lenstrans_test lenstrans_overlay
 git clone --depth 1 --branch b10688 https://github.com/ggml-org/llama.cpp.git third_party\llama.cpp
 ```
 
-llama.cpp を **Release x64** でビルドしてから LensTrans を再構成します。CMake は `third_party/llama.cpp/build/src/Release/llama.lib` を見つけると `LENSTRANS_WITH_LLAMA=ON` を立てます。ピン留めの詳細は [third_party/README.md](../../third_party/README.md)。
+llama.cpp を **Release x64** でビルドしてから LensTrans を再構成します。CMake は `third_party/llama.cpp/build/src/Release/llama.lib` を見つけると `LENSTRANS_WITH_LLAMA=ON` を立てます。ピン留めの詳細は [third_party/README.md](third_party/README.md)。
 
 ```
 tag:    b10688
@@ -105,7 +112,7 @@ Ninja + MSVC でも構いません。vcpkg を足さないでください。UI �
 | `lenstrans_e2e_target` | overlay スクリプト用の独立 HWND（白地 `HELLO Settings`） |
 | `lenstrans_wgc_probe` | WGC 権限 + OCR スモーク |
 
-`tools/eval/*.ps1` は受け入れ用スクリプトで、報告は `tools/eval/out/` に書き（gitignore 済み）、説明は [tests/README.md](../../tests/README.md) にあります。
+`tools/eval/*.ps1` は受け入れ用スクリプトで、報告は `tools/eval/out/` に書き（gitignore 済み）、説明は [tests/README.md](tests/README.md) にあります。
 
 ### パッケージ
 
@@ -133,7 +140,7 @@ powershell -File tools\pack\install-windows.ps1
 
 手元ではスクリプト基本ツリーが約 **4.5 MB**（zip 約 1.8 MB）、オフライン合計約 **496 MB** で、いずれも上限内でした。単機の成果物です。ツールチェーンで数字は変わりますが、予算は変わりません。
 
-既定の重み: `qwen2.5-0.5b-instruct-q4_k_m.gguf`、491400032 バイト、SHA256 `74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db`。入手手順は [models/README.md](../../models/README.md)。これを選んだ理由は **Apache-2.0 が EU/UK/KR を含む再配布を許す** からであって、0.5B が専任の機械翻訳に達しているからではありません。
+既定の重み: `qwen2.5-0.5b-instruct-q4_k_m.gguf`、491400032 バイト、SHA256 `74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db`。入手手順は [models/README.md](models/README.md)。これを選んだ理由は **Apache-2.0 が EU/UK/KR を含む再配布を許す** からであって、0.5B が専任の機械翻訳に達しているからではありません。
 
 ## プライバシー
 
@@ -148,7 +155,7 @@ powershell -File tools\pack\install-windows.ps1
 | | 状態 |
 | --- | --- |
 | **Windows 10/11 x64** | C++20 + Win32。これが製品本体です。 |
-| **macOS** | `mac/` は Swift AppKit の **インターフェーススタブ**。[mac/UNIMPLEMENTED.md](../../mac/UNIMPLEMENTED.md) を見てください。ScreenCaptureKit / Vision / Metal は未配線。本リポジトリに Xcode プロジェクトはありません。Windows を先に仕上げます。 |
+| **macOS** | `mac/` は Swift AppKit の **インターフェーススタブ**。[mac/UNIMPLEMENTED.md](mac/UNIMPLEMENTED.md) を見てください。ScreenCaptureKit / Vision / Metal は未配線。本リポジトリに Xcode プロジェクトはありません。Windows を先に仕上げます。 |
 
 ## 制限（先に読んでください）
 
@@ -160,7 +167,7 @@ powershell -File tools\pack\install-windows.ps1
 ## ディレクトリ
 
 ```
-core/           共有 C++: OcrBlock、フレーム差、ローカル/クラウドエンジン、提示、パイプライン、設定
+core/           共有 C++: OcrBlock、フレーム差、ローカル/クラウドエンジン、表示、パイプライン、設定
 win/            overlay、WGC キャプチャ、WinRT OCR、トレイと設定、DPAPI
 mac/            Swift スタブ（Windows 上ではコンパイルしない）
 tests/          単体、e2e フィクスチャ、WGC プローブ
@@ -171,11 +178,11 @@ models/         GGUF を置く（重みはリポジトリに入れない）
 third_party/    llama.cpp b10688 を自分で clone（ツリーはリポジトリに入れない）
 ```
 
-モジュール表と厳しい制約: [docs/M0-poc-structure.md](../M0-poc-structure.md)。モデル許諾と評価計画: [docs/M0-model-eval.md](../M0-model-eval.md)。
+モジュール表と厳しい制約: [docs/M0-poc-structure.md](docs/M0-poc-structure.md)。モデル許諾と評価計画: [docs/M0-model-eval.md](docs/M0-model-eval.md)。
 
 ## ライセンス
 
-[MIT](../../LICENSE) © 2026 flynn (suifei)。
+[MIT](LICENSE) © 2026 flynn (suifei)。
 
 任意の Qwen2.5-0.5B GGUF は **Apache-2.0**（Alibaba Cloud）です。重みを再配布するときはその許諾を添えてください。照合用コピー: `tools/eval/licenses/`。llama.cpp は上流のライセンスに従います。公式リポジトリから clone してください。
 
@@ -189,4 +196,4 @@ third_party/    llama.cpp b10688 を自分で clone（ツリーはリポジト�
 - 表示経路で「原文がまだ見えるのに半透明の訳が重なる」状態は回帰です。
 - `core/` を触ったら先に `lenstrans_test` を通してください。
 
-評価の途中で llama.cpp の commit を上げないでください。ロックは [third_party/README.md](../../third_party/README.md)。
+評価の途中で llama.cpp の commit を上げないでください。ロックは [third_party/README.md](third_party/README.md)。
