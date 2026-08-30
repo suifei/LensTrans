@@ -1,3 +1,5 @@
+import Foundation
+
 // Pure Foundation logic shared by macOS app + Linux/macOS `swift test`.
 // Keep AppKit out of this file so CI without Cocoa can still verify invariants.
 

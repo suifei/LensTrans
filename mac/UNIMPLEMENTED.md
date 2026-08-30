@@ -4,10 +4,11 @@
 
 ```bash
 cd ~/works/LensTrans/mac   # 或仓库 mac/
-swift test                 # LensTransLogic 纯逻辑
+swift test                 # LensTransLogic 纯逻辑（Linux 亦可）
 swift build -c release     # 需 Apple SDK；Linux 上 executable 目标会失败属预期
 ```
 
+Linux 已验证（2026-08-30）：`swift test` → LogicTests **7/7 pass**；`python3 tools/eval/mac-logic-verify.py` **PASS**。
 无 Electron / Tauri。CMake 不混编 Swift。
 
 | 文件 | 对等 Windows | 状态 |

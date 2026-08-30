@@ -1,0 +1,45 @@
+name: ci
+
+on:
+  push:
+    branches: [main, "cursor/**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  linux-core-and-mac-logic:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure & build lenstrans_test
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++
+          cmake --build build --target lenstrans_test -j
+
+      - name: Run lenstrans_test
+        env:
+          LENSTRANS_ROOT: ${{ github.workspace }}
+        run: ./build/lenstrans_test
+
+      - name: mac-logic-verify.py
+        run: python3 tools/eval/mac-logic-verify.py
+
+      - name: Install Swift
+        run: |
+          curl -fsSL -o /tmp/swift.tar.gz \
+            https://download.swift.org/swift-5.10.1-release/ubuntu2204/swift-5.10.1-RELEASE/swift-5.10.1-RELEASE-ubuntu22.04.tar.gz
+          sudo mkdir -p /opt/swift
+          sudo tar -xzf /tmp/swift.tar.gz -C /opt/swift --strip-components=1
+          echo /opt/swift/usr/bin >> $GITHUB_PATH
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libncurses6
+
+      - name: swift test (LensTransLogic)
+        working-directory: mac
+        run: /opt/swift/usr/bin/swift test
+
+      - name: goal-verify.py
+        run: |
+          export PATH="/usr/bin:/bin:/opt/swift/usr/bin:$PATH"
+          python3 tools/eval/goal-verify.py
