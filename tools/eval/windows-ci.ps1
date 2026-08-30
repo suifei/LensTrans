@@ -20,6 +20,20 @@ function Add-Result($id, $name, $pass, $evidence, $detail) {
 Set-Location $Root
 $env:LENSTRANS_ROOT = $Root
 
+# --- cmake generator (VS 2022 / 2025) ---
+function Get-VsGenerator {
+  $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+  if (Test-Path $vswhere) {
+    $ver = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationVersion
+    if ($ver -match '^18\.') { return "Visual Studio 18 2025" }
+    if ($ver -match '^17\.') { return "Visual Studio 17 2022" }
+  }
+  # Prefer 2022 label; cmake will error clearly if absent.
+  return "Visual Studio 17 2022"
+}
+$Gen = Get-VsGenerator
+Write-Host "CMake generator: $Gen"
+
 # --- llama.cpp b10688 ---
 $llamaSrc = Join-Path $Root "third_party\llama.cpp"
 $llamaLib = Join-Path $llamaSrc "build\src\Release\llama.lib"
@@ -28,9 +42,11 @@ if (-not $SkipLlamaBuild) {
     git clone --depth 1 --branch b10688 https://github.com/ggml-org/llama.cpp.git $llamaSrc
   }
   if (-not (Test-Path $llamaLib)) {
-    cmake -S $llamaSrc -B (Join-Path $llamaSrc "build") -G "Visual Studio 17 2022" -A x64 `
+    cmake -S $llamaSrc -B (Join-Path $llamaSrc "build") -G $Gen -A x64 `
       -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=OFF
-    cmake --build (Join-Path $llamaSrc "build") --config Release --target llama -j 8
+    if ($LASTEXITCODE -ne 0) { throw "llama cmake configure failed" }
+    cmake --build (Join-Path $llamaSrc "build") --config Release --target llama
+    if ($LASTEXITCODE -ne 0) { throw "llama build failed" }
   }
 }
 $haveLlama = Test-Path $llamaLib
@@ -38,8 +54,8 @@ Add-Result "llama_build" "llama.cpp b10688" $haveLlama $llamaLib $(if ($haveLlam
 
 # --- configure + build LensTrans ---
 $build = Join-Path $Root "build"
-cmake -S $Root -B $build -G "Visual Studio 17 2022" -A x64
-$targets = @(
+cmake -S $Root -B $build -G $Gen -A x64
+if ($LASTEXITCODE -ne 0) { throw "LensTrans cmake configure failed generator=$Gen" }$targets = @(
   "lenstrans_test",
   "lenstrans_test_hotkey",
   "lenstrans_overlay",
