@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -36,6 +37,24 @@ inline std::size_t Utf8CodepointCount(const std::string& text) {
     ++count;
   }
   return count;
+}
+
+inline std::uint32_t Utf8CodepointAt(const std::string& text, std::size_t offset) {
+  if (offset >= text.size()) return 0;
+  const auto c0 = static_cast<unsigned char>(text[offset]);
+  const auto next = Utf8Next(text, offset);
+  if (next == offset + 1) return c0;
+  if (next == offset + 2)
+    return ((c0 & 0x1fu) << 6) |
+           (static_cast<unsigned char>(text[offset + 1]) & 0x3fu);
+  if (next == offset + 3)
+    return ((c0 & 0x0fu) << 12) |
+           ((static_cast<unsigned char>(text[offset + 1]) & 0x3fu) << 6) |
+           (static_cast<unsigned char>(text[offset + 2]) & 0x3fu);
+  return ((c0 & 0x07u) << 18) |
+         ((static_cast<unsigned char>(text[offset + 1]) & 0x3fu) << 12) |
+         ((static_cast<unsigned char>(text[offset + 2]) & 0x3fu) << 6) |
+         (static_cast<unsigned char>(text[offset + 3]) & 0x3fu);
 }
 
 inline std::vector<std::string> WrapUtf8(const std::string& text, int columns) {

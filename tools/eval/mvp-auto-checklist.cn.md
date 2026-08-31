@@ -3,7 +3,7 @@
 | 透明框（分层/拖拽/穿透） | partial | {{transparent}} | overlay-e2e COVER_OK; click-through hit_test=target（Agent SendInput skip） |
 | WGC 捕获 | yes | {{wgc}} | tools/eval/out/wgc-probe.md; overlay-wgc-monitor.md; overlay-wgc-window.md |
 | OCR (WinRT STA) | yes | {{ocr}} | wgc_probe mem_ok; overlay OCR HELLO Settings |
-| 本地 Qwen2.5-0.5B | partial | {{qwen}} | quality-10.md; overlay-llama-e2e.md |
+| 本地 Qwen2.5-1.5B | partial | {{qwen}} | quality-10.md; overlay-llama-e2e.md |
 | 云端 OpenAI 兼容 mock/SSE | yes | {{cloud}} | tests/test_core.cpp ParseChatCompletionBody RouteEngine |
 | 托盘/设置/引导/热键 | partial | {{hotkey}} | lenstrans_test_hotkey RegisterHotKey; hotkey-probe.md WM_HOTKEY |
 | 沉浸/贴条盖原文 | yes | {{present}} | test_core inject; overlay-e2e COVER_OK+PRESENT |

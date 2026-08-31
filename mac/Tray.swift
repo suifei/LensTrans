@@ -116,7 +116,7 @@ final class TrayController: NSObject {
     @objc private func checkUpdate() {
         let a = NSAlert()
         a.messageText = "检查更新"
-        a.informativeText = "本版本不联网自动更新。当前 0.2 / Qwen2.5-0.5B Q4_K_M。"
+        a.informativeText = "本版本不联网自动更新。当前 0.3.0 / Qwen2.5-1.5B Q4_K_M。"
         a.runModal()
     }
 

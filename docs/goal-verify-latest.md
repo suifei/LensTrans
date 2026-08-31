@@ -1,14 +1,14 @@
 # Goal verify (PRD v0.2)
 
-- date: 2026-08-30T19:58:23Z
+- date: 2026-08-31T19:27:40Z
 - host: Darwin 25.5.0
 - root: `/Users/suifei/works/LensTrans/lenstrans`
 
 | item | auto | status | evidence |
 | --- | --- | --- | --- |
 | no Electron/Tauri/Hunyuan deps | yes | **pass** | clean |
-| offline budget arithmetic | yes | **pass** | 520e6 - 491400032 = 28599968 (installer headroom) |
-| GGUF SHA256 lock | yes | **pass** | model_meta.hpp / ModelMetaLogic 74a4da8c… |
+| offline budget arithmetic | yes | **pass** | 2.2e9 - 1117320736 = 1082679264 (installer headroom) |
+| GGUF SHA256 lock | yes | **pass** | model_meta.hpp / ModelMetaLogic 6a1a2eb6… |
 | lenstrans_test (cache/route/present/cloud) | yes | **pass** | test_core: all checks passed |
 | mac-logic-verify.py | yes | **pass** | tools/eval/mac-logic-verify.py |
 | swift test LensTransLogic | yes | **pass** | exit=0; 7 tests |

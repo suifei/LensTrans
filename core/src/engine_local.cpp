@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -56,6 +57,7 @@ class LlamaEngine final : public IEngine {
     return true;
 #endif
   }
+  bool Preload() override { return Load(); }
 
   void NoteActivity() override { last_activity_ = std::chrono::steady_clock::now(); }
 
@@ -110,15 +112,16 @@ class LlamaEngine final : public IEngine {
     }
     const auto t0 = std::chrono::steady_clock::now();
     std::lock_guard<std::mutex> lock(mu_);
-    const std::string prompt = WrapQwenChat(BuildTranslatePrompt(req));
+    const std::string prompt = BuildLocalEnginePrompt(req, path_);
     const llama_vocab* vocab = llama_model_get_vocab(model_);
+    const bool hunyuan_mt = IsHunyuanMtModelPath(path_);
     std::vector<llama_token> tokens(prompt.size() + 16);
     int n = llama_tokenize(vocab, prompt.c_str(), static_cast<int>(prompt.size()), tokens.data(),
-                           static_cast<int>(tokens.size()), true, true);
+                           static_cast<int>(tokens.size()), !hunyuan_mt, true);
     if (n < 0) {
       tokens.resize(static_cast<std::size_t>(-n));
       n = llama_tokenize(vocab, prompt.c_str(), static_cast<int>(prompt.size()), tokens.data(),
-                         static_cast<int>(tokens.size()), true, true);
+                         static_cast<int>(tokens.size()), !hunyuan_mt, true);
     }
     if (n <= 0) {
       r.error = "tokenize failed";
@@ -126,7 +129,7 @@ class LlamaEngine final : public IEngine {
     }
     tokens.resize(static_cast<std::size_t>(n));
     const int n_vocab = llama_vocab_n_tokens(vocab);
-    const int max_new = req.batch_protocol ? (req.quality ? 512 : 384) : (req.quality ? 96 : 48);
+    const int max_new = TranslationOutputTokenBudget(req);
     auto decode_prompt = [&]() -> bool {
       llama_memory_clear(llama_get_memory(ctx_), true);
       constexpr int kPromptChunk = 512;
@@ -152,7 +155,20 @@ class LlamaEngine final : public IEngine {
       return static_cast<float>(logits[id] - mx - std::log(z));
     };
     auto greedy_from_here = [&](std::string& out, float& score, int remain) {
-      llama_sampler* smpl = llama_sampler_init_greedy();
+      const bool formatted_hunyuan = hunyuan_mt && prompt.find("<source>") != std::string::npos;
+      llama_sampler* smpl = nullptr;
+      if (hunyuan_mt) {
+        smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());
+        llama_sampler_chain_add(smpl, llama_sampler_init_penalties(
+            n_vocab, 64, 1.05f, 0.0f, 0.0f));
+        llama_sampler_chain_add(smpl, llama_sampler_init_top_k(20));
+        llama_sampler_chain_add(smpl, llama_sampler_init_top_p(0.6f, 1));
+        llama_sampler_chain_add(smpl, llama_sampler_init_min_p(0.05f, 1));
+        llama_sampler_chain_add(smpl, llama_sampler_init_temp(0.7f));
+        llama_sampler_chain_add(smpl, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
+      } else {
+        smpl = llama_sampler_init_greedy();
+      }
       for (int i = 0; i < remain; ++i) {
         const llama_token id = llama_sampler_sample(smpl, ctx_, -1);
         llama_sampler_accept(smpl, id);
@@ -163,6 +179,20 @@ class LlamaEngine final : public IEngine {
           break;
         score += logprob_of(id);
         out += tok;
+        if (tok.find("[end of text]") != std::string::npos) break;
+        if (formatted_hunyuan) {
+          bool complete = false;
+          for (auto target_end = out.find("</target>"); target_end != std::string::npos;
+               target_end = out.find("</target>", target_end + 9)) {
+            const auto target_start = out.rfind("<target>", target_end);
+            if (target_start != std::string::npos && out.find("<sn", target_start) < target_end) {
+              out.erase(target_end + 9);
+              complete = true;
+              break;
+            }
+          }
+          if (complete) break;
+        }
         llama_batch one = llama_batch_get_one(const_cast<llama_token*>(&id), 1);
         if (llama_decode(ctx_, one) != 0) break;
       }
@@ -197,7 +227,7 @@ class LlamaEngine final : public IEngine {
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0)
             .count());
 
-    if (!req.quality) {
+    if (!req.quality || hunyuan_mt) {
       std::string out;
       float score = 0;
       greedy_from_here(out, score, max_new);
@@ -250,16 +280,24 @@ class CliEngine final : public IEngine {
     return GetFileAttributesA(model_.c_str()) != INVALID_FILE_ATTRIBUTES &&
            GetFileAttributesA(cli_.c_str()) != INVALID_FILE_ATTRIBUTES;
   }
+  bool Preload() override { return false; }
   TranslateResult Translate(const TranslateRequest& req) override {
     TranslateResult r;
     r.engine = EngineKind::Local;
     const auto t0 = std::chrono::steady_clock::now();
-    const std::string prompt = BuildTranslatePrompt(req);
-    const int max_new = req.batch_protocol ? (req.quality ? 512 : 384) : 96;
+    const std::string prompt = BuildLocalEnginePrompt(req, model_);
+    const int max_new = TranslationOutputTokenBudget(req);
+    const std::string sampling = IsHunyuanMtModelPath(model_)
+                                     ? " --temp 0.7 --top-k 20 --top-p 0.6 --repeat-penalty 1.05"
+                                     : " --temp 0";
+    const std::string tokenizer = IsHunyuanMtModelPath(model_)
+                                      ? " --override-kv tokenizer.ggml.add_bos_token=bool:false"
+                                      : "";
     std::string cmd = "\"" + cli_ + "\" -m \"" + model_ + "\" -p \"" + prompt +
                       "\" -n " + std::to_string(max_new) +
                       " -c " + std::string(req.batch_protocol ? "4096" : "1024") +
-                      " --batch-size 512 -ngl 0 --temp 0 -no-cnv --log-disable";
+                      " --batch-size 512 -ngl 0" + tokenizer + sampling +
+                      " -no-cnv --log-disable";
     SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
     HANDLE rd = nullptr, wr = nullptr;
     CreatePipe(&rd, &wr, &sa, 0);

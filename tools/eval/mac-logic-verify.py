@@ -100,10 +100,10 @@ def main() -> int:
     check(parse_chat(sse) == "你好", "sse parse")
     check(route("auto", False, 10, True, True) == "local", "route short")
     check(route("auto", False, 201, True, True) == "cloud", "route long")
-    check(491400032 == 491400032, "gguf bytes")
+    check(1117320736 == 1117320736, "gguf bytes")
     check(
-        "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db"
-        == "74A4DA8C9FDBCD15BD1F6D01D621410D31C6FC00986F5EB687824E7B93D7A9DB".lower(),
+        "6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e"
+        == "6A1A2EB6D15622BF3C96857206351BA97E1AF16C30D7A74EE38970E434E9407E".lower(),
         "sha256 case",
     )
 

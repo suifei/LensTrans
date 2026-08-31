@@ -38,8 +38,9 @@ final class OverlayPanel: NSPanel {
         hidesOnDeactivate = false
         // Normal capture must exclude the overlay. Visual E2E can opt in so Computer Use
         // can inspect the rendered panel; the capture filter still excludes this window.
-        sharingType = ProcessInfo.processInfo.environment["LENSTRANS_VISUAL_TEST"] == "1"
-            ? .readOnly : .none
+        // The app's own SCStream excludes this window explicitly. Keep it visible to normal
+        // screenshots/recordings so users can report and verify the rendered result.
+        sharingType = .readOnly
 
         let chrome = OverlayChromeView(frame: NSRect(origin: .zero, size: contentRect.size))
         chrome.panel = self
@@ -139,7 +140,10 @@ final class OverlayPanel: NSPanel {
                              fill: block.fill, textColor: block.textColor,
                              stickerAlpha: block.stickerAlpha, in: rect, ctx: ctx,
                              maxFont: block.fontSize > 0 ? block.fontSize : nil,
-                             fontWeight: block.fontWeight, textInset: block.textInset,
+                             fontWeight: block.fontWeight, lineHeight: block.lineHeight,
+                             centerTextVertically: block.centerTextVertically,
+                             coverRects: block.coverRects,
+                             textInset: block.textInset,
                              cornerRadius: block.cornerRadius)
             accepted.append(rect)
         }

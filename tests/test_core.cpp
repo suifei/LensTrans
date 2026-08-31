@@ -21,6 +21,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -105,11 +107,44 @@ int main() {
     CHECK(bound[1].source.bbox.y == 42 && bound[1].translation.empty());
     CHECK(BatchTranslationUsable(blocks, "0|||你好\n1|||世界"));
     CHECK(!BatchTranslationUsable(blocks, "0|||Hello\n1|||world"));
+    CHECK(TranslationUsableForTarget("Hello", "你好", "zh"));
+    CHECK(!TranslationUsableForTarget("Hello", "Hello", "zh"));
+    CHECK(!TranslationUsableForTarget("Hello", "Hello again", "zh"));
+    CHECK(!TranslationUsableForTarget("Hello", "Résumé", "zh-Hans"));
+    CHECK(TranslationUsableForTarget("Hello", "这是 Windows 设置", "Simplified Chinese"));
+    CHECK(SourceNeedsTranslationForTarget("Hello LensTrans", "zh"));
+    CHECK(!SourceNeedsTranslationForTarget("mac-desktop.txt", "zh"));
+    CHECK(!SourceNeedsTranslationForTarget("mac-desktop.txt — Edited", "zh"));
+    CHECK(!SourceNeedsTranslationForTarget("→", "zh"));
+    CHECK(SourceNeedsTranslationForTarget("こんにちは", "zh"));
+    CHECK(SourceNeedsTranslationForTarget("Привет", "zh"));
+    CHECK(SourceNeedsTranslationForTarget("مرحبا", "zh"));
+    CHECK(TranslationUsableForTarget("你好", "Hello", "en"));
+    CHECK(!TranslationUsableForTarget("你好", "世界", "en"));
+    CHECK(IsRedundantParagraphTranslation("这是第一句完整译文 这是第二句", "这是第一句完整译文"));
+    CHECK(!IsRedundantParagraphTranslation("第一句", "第三句"));
+    CHECK(ParseBatchTranslation("protocol missing", 2) == std::vector<std::string>({"", ""}));
+    const auto formatted = ParseBatchTranslation(
+        "<target><sn>0|||你好</sn><sn>1|||A &amp; B</sn></target>", 2);
+    CHECK(formatted.size() == 2 && formatted[0] == "你好" && formatted[1] == "A & B");
+    CHECK(BuildHunyuanFormattedBatchSource("0|||A < B\n1|||C & D") ==
+          "<source>\n<sn>0|||A &lt; B</sn>\n<sn>1|||C &amp; D</sn>\n</source>");
     const auto ranges = BatchRanges(10, 4);
     CHECK(ranges.size() == 3 && ranges[0].first == 0 && ranges[0].second == 4);
     CHECK(ranges[2].first == 8 && ranges[2].second == 10);
     CHECK(BatchFallbackUsable(5, 3));
     CHECK(!BatchFallbackUsable(5, 2));
+    TranslateRequest budget;
+    budget.batch_protocol = true;
+    budget.text.assign(3000, 'x');
+    CHECK(TranslationOutputTokenBudget(budget) == 768);
+    budget.quality = true;
+    CHECK(TranslationOutputTokenBudget(budget) == 1024);
+    TranslateRequest hy_request{.text = "Hello", .src_lang = "auto", .tgt_lang = "zh"};
+    const auto hy_prompt = BuildLocalEnginePrompt(hy_request, "HY-MT1.5-1.8B-Q4_K_M.gguf");
+    CHECK(hy_prompt.rfind("<|startoftext|>", 0) == 0);
+    CHECK(hy_prompt.find("将以下文本翻译为简体中文") != std::string::npos);
+    CHECK(hy_prompt.rfind("<|extra_0|>") == hy_prompt.size() - 11);
   }
 
   {
@@ -218,6 +253,61 @@ int main() {
   CHECK(ContrastRatio(255, 255, 255, 0, 0, 0) >= kWcagAaContrast);
   CHECK(ContrastRatio(0, 0, 0, 255, 255, 255) >= kWcagAaContrast);
   CHECK(ContrastRatio(140, 140, 140, 128, 128, 128) < kWcagAaContrast);
+  {
+    OcrBlock first{"This is a long paragraph line", {10, 10, 160, 10}, 10, {}, {30, 30, 30}, 2};
+    OcrBlock second{"continuing on the next line", {10, 22, 170, 10}, 10, {}, {30, 30, 30}, 2};
+    LayoutOptions paragraph;
+    paragraph.frame_width = 200;
+    paragraph.frame_height = 100;
+    paragraph.target_width = 200;
+    paragraph.target_height = 100;
+    paragraph.merge_paragraphs = true;
+    const auto merged = BuildPresentLayout(
+        {{first, "这是长段落的第一行", {}, false},
+         {second, "并在下一行继续", {}, false}}, paragraph);
+    CHECK(merged.size() == 1);
+    if (!merged.empty()) {
+      CHECK(merged[0].source.bbox.h > 20);
+      CHECK(merged[0].translation.find("下一行") != std::string::npos);
+      CHECK(!merged[0].center_text_vertically);
+      CHECK(merged[0].cover_rects.size() == 2);
+    }
+    first.text = "File";
+    first.bbox.w = 30;
+    second.text = "Edit";
+    second.bbox.w = 30;
+    const auto labels = BuildPresentLayout(
+        {{first, "文件", {}, false}, {second, "编辑", {}, false}}, paragraph);
+    CHECK(labels.size() == 2);
+    if (labels.size() == 2) CHECK(labels[0].center_text_vertically);
+  }
+  {
+    OcrBlock tiny{"tiny", {10, 10, 40, 8}, 8, {}, {255, 255, 255}, 2};
+    LayoutOptions retina;
+    retina.frame_width = 200;
+    retina.frame_height = 100;
+    retina.target_width = 100;
+    retina.target_height = 50;
+    retina.target_pixels_per_unit = 2;
+    const auto mac_layout = BuildPresentLayout({{tiny, "小字", {}, false}}, retina);
+    LayoutOptions windows = retina;
+    windows.target_width = 200;
+    windows.target_height = 100;
+    windows.target_pixels_per_unit = 1;
+    const auto win_layout = BuildPresentLayout({{tiny, "小字", {}, false}}, windows);
+    CHECK(mac_layout.size() == 1 && win_layout.size() == 1);
+    if (!mac_layout.empty() && !win_layout.empty()) {
+      CHECK(std::fabs(mac_layout[0].font_px * 2 - win_layout[0].font_px) < 0.1f);
+      CHECK(mac_layout[0].font_px * 2 >= 6.0f);
+      CHECK(win_layout[0].font_px >= 6.0f);
+    }
+    tiny.bbox.h = 100;
+    tiny.line_height = 100;
+    const auto capped_mac = BuildPresentLayout({{tiny, "大字", {}, false}}, retina);
+    const auto capped_win = BuildPresentLayout({{tiny, "大字", {}, false}}, windows);
+    CHECK(!capped_mac.empty() && capped_mac[0].font_px <= 10.0f);
+    CHECK(!capped_win.empty() && capped_win[0].font_px <= 20.0f);
+  }
   {
     int tr = 255, tg = 255, tb = 255;
     EnsureAaColor(tr, tg, tb, 0, 0, 0);
@@ -557,9 +647,11 @@ int main() {
         CHECK(layout.rect.w > 0 && layout.rect.h > 0);
         CHECK(layout.covers_source && layout.background_alpha >= 0.60f);
         CHECK(layout.font_weight == 400);
-        CHECK(layout.font_px >= 8 && layout.line_height_px >= layout.font_px);
-        CHECK(layout.text_inset_x >= 2 && layout.text_inset_y >= 1);
-        CHECK(layout.corner_radius >= 1 && layout.corner_radius <= 2);
+        CHECK(layout.font_px >= 6 && layout.line_height_px >= layout.font_px);
+        CHECK(layout.text_inset_x >= 1.5f && layout.text_inset_y >= 0.75f);
+        CHECK(layout.mode == PresentMode::Immersive
+                  ? layout.corner_radius == 0
+                  : layout.corner_radius >= 1 && layout.corner_radius <= 2);
       }
       CHECK(second.layout[1].mode == PresentMode::Sticker);
     }
@@ -588,12 +680,27 @@ int main() {
   CHECK(RunValuePointsTo("\"C:\\a b\\app.exe\"", "C:\\a b\\app.exe"));
   CHECK(!RunValuePointsTo("C:\\other.exe", "C:\\a\\app.exe"));
 
-  CHECK(kDefaultGgufBytes == 491400032ull);
+  CHECK(kDefaultGgufBytes == 1117320736ull);
   CHECK(IsDefaultGgufSha256(kDefaultGgufSha256));
-  CHECK(IsDefaultGgufSha256("74A4DA8C9FDBCD15BD1F6D01D621410D31C6FC00986F5EB687824E7B93D7A9DB"));
+  CHECK(IsDefaultGgufSha256("6A1A2EB6D15622BF3C96857206351BA97E1AF16C30D7A74EE38970E434E9407E"));
   CHECK(!IsDefaultGgufSha256("deadbeef"));
   CHECK(DefaultModelFileName() == kDefaultGgufFileName);
   CHECK(kLocalIdleUnloadMs == 10 * 60 * 1000);
+  {
+    const auto dir = std::filesystem::temp_directory_path() / "lenstrans-model-catalog-test";
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+    std::filesystem::create_directories(dir, ec);
+    std::ofstream(dir / "z-model.gguf").put('z');
+    std::ofstream(dir / "a-model.gguf").put('a');
+    std::ofstream(dir / "ignored.txt").put('x');
+    const auto models = GgufFilesIn(dir.string());
+    CHECK(models.size() == 2);
+    if (models.size() == 2) CHECK(models[0].find("a-model.gguf") != std::string::npos);
+    std::ofstream(dir / "active-model.txt") << "z-model.gguf\n";
+    CHECK(ActiveModelIn(dir.string()).find("z-model.gguf") != std::string::npos);
+    std::filesystem::remove_all(dir, ec);
+  }
 #ifndef _WIN32
   {
     // Do not hardcode /workspace — CI checkouts live under /home/runner/work/...

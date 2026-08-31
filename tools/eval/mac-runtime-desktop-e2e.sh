@@ -40,15 +40,26 @@ trap 'kill "$APP_PID" 2>/dev/null || true' EXIT
 
 deadline=$((SECONDS + 60))
 while (( SECONDS < deadline )); do
-  if grep -q 'batch.usable=true' "$LOG" && \
-     grep -Eq 'present.committed blocks=([89]|[1-9][0-9]+)' "$LOG"; then break; fi
+  if grep -Eq 'batch\.usable=[1-9][0-9]*/[1-9][0-9]*' "$LOG" && \
+     grep -Eq 'present.committed blocks=([3-9]|[1-9][0-9]+)' "$LOG"; then break; fi
   sleep 1
 done
 
 # One diagnostic screenshot is enough for visual QA; product capture uses SCKit,
 # so this test does not exercise repeated screenshot capture.
-screencapture -x -D 1 "$SHOT" 2>/dev/null || true
-screencapture -x -D 2 "${SHOT%.png}-display2.png" 2>/dev/null || true
+if ! screencapture -x -D 1 "$SHOT" 2>/dev/null; then
+  echo "runtime-desktop-e2e status=FAIL reason=primary-screenshot-failed" >&2
+  exit 1
+fi
+DISPLAY2_SHOT="${SHOT%.png}-display2.png"
+if ! screencapture -x -D 2 "$DISPLAY2_SHOT" 2>/dev/null; then
+  echo "runtime-desktop-e2e status=FAIL reason=target-screenshot-failed" >&2
+  exit 1
+fi
+if ! xcrun swift "$ROOT/tools/eval/mac-runtime-screenshot-check.swift" "$DISPLAY2_SHOT"; then
+  echo "runtime-desktop-e2e status=FAIL reason=overlay-not-visible-in-screenshot" >&2
+  exit 1
+fi
 
 if ! grep -q 'capture.ready' "$LOG"; then
   echo "runtime-desktop-e2e status=FAIL reason=capture-not-started log=$LOG" >&2
@@ -60,17 +71,29 @@ if ! grep -q 'ocr.blocks=[1-9].*Hello LensTrans' "$LOG"; then
   tail -80 "$LOG" >&2 || true
   exit 1
 fi
-if ! grep -q 'batch.usable=true' "$LOG"; then
+if ! grep -Eq 'batch\.usable=[1-9][0-9]*/[1-9][0-9]*' "$LOG"; then
   echo "runtime-desktop-e2e status=FAIL reason=batch-translation-unusable log=$LOG" >&2
   tail -80 "$LOG" >&2 || true
   exit 1
 fi
-if ! grep -Eq 'batch\.fallback_result\[[0-9]+\]=.*[一-龥]' "$LOG"; then
+if ! grep -Eq '((^|:)[0-9]+|<sn>[0-9]+)\|\|\|.*[一-龥]' "$LOG"; then
   echo "runtime-desktop-e2e status=FAIL reason=batch-output-has-no-chinese log=$LOG" >&2
   tail -80 "$LOG" >&2 || true
   exit 1
 fi
-if ! grep -Eq 'present.committed blocks=([89]|[1-9][0-9]+)' "$LOG"; then
+if ! grep -q 'model.prewarm ready=true' "$LOG"; then
+  echo "runtime-desktop-e2e status=FAIL reason=model-not-prewarmed log=$LOG" >&2
+  tail -80 "$LOG" >&2 || true
+  exit 1
+fi
+if awk -F'fontPhysicalPx=' '/fontPhysicalPx=/{ if (($2 + 0) > 20.5) bad=1 } END{ exit bad }' "$LOG"; then
+  :
+else
+  echo "runtime-desktop-e2e status=FAIL reason=physical-font-cap-exceeded log=$LOG" >&2
+  tail -80 "$LOG" >&2 || true
+  exit 1
+fi
+if ! grep -Eq 'present.committed blocks=([3-9]|[1-9][0-9]+)' "$LOG"; then
   echo "runtime-desktop-e2e status=FAIL reason=translation-not-present log=$LOG" >&2
   tail -80 "$LOG" >&2 || true
   exit 1

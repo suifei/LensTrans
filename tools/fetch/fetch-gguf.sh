@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Download official Qwen2.5-0.5B Instruct Q4_K_M GGUF with resume (-C -).
+# Download official Qwen2.5-1.5B Instruct Q4_K_M GGUF with resume (-C -).
 # Prefer ModelScope (domestic). Do NOT rely on Hugging Face direct.
 # Verifies size + SHA256 against model_meta / ModelMetaLogic.
 # Never commits the file (gitignores *.gguf).
@@ -14,12 +14,12 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 # shellcheck source=tools/fetch/_proxy.sh
 source "$(dirname "$0")/_proxy.sh"
 
-NAME=qwen2.5-0.5b-instruct-q4_k_m.gguf
-EXPECTED_BYTES=491400032
-EXPECTED_SHA=74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db
+NAME=qwen2.5-1.5b-instruct-q4_k_m.gguf
+EXPECTED_BYTES=1117320736
+EXPECTED_SHA=6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e
 # Domestic first (ModelScope). HF listed only as last-resort via proxy — not required.
-URL_MS="https://www.modelscope.cn/models/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/master/${NAME}"
-URL_HF="https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/${NAME}"
+URL_MS="https://www.modelscope.cn/models/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/master/${NAME}"
+URL_HF="https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/${NAME}"
 DEST="$ROOT/models/$NAME"
 APP_SUPPORT="$HOME/Library/Application Support/LensTrans/models/$NAME"
 TO_APP=0
@@ -121,5 +121,5 @@ if [[ "$TO_APP" -eq 1 ]]; then
   verify_file "$APP_SUPPORT"
 fi
 
-echo "license: tools/eval/licenses/Qwen2.5-0.5B-Instruct-LICENSE.txt"
+echo "license: tools/eval/licenses/Qwen2.5-0.5B-Instruct-LICENSE.txt (Apache-2.0 Qwen2.5 family)"
 echo "RESULT=PASS dest=$DEST"

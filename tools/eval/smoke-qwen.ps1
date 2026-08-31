@@ -1,4 +1,4 @@
-# D3 smoke: load official Qwen2.5-0.5B Q4_K_M and run one en->zh prompt.
+# D3 smoke: load official Qwen2.5-1.5B Q4_K_M and run one en->zh prompt.
 # Usage: powershell -File tools/eval/smoke-qwen.ps1
 $ErrorActionPreference = "Stop"
 $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
@@ -12,7 +12,7 @@ $cli = @(
 ) | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $cli) { throw "llama-cli.exe not found. Build b10688 first." }
 
-$gguf = "$root\models\qwen2.5-0.5b-instruct-q4_k_m.gguf"
+$gguf = "$root\models\qwen2.5-1.5b-instruct-q4_k_m.gguf"
 $hash = (Get-FileHash -Algorithm SHA256 $gguf).Hash
 if ($hash -ne "74A4DA8C9FDBCD15BD1F6D01D621410D31C6FC00986F5EB687824E7B93D7A9DB") {
     throw "GGUF SHA256 mismatch: $hash"

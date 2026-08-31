@@ -66,7 +66,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: models/qwen2.5-0.5b-instruct-q4_k_m.gguf
-          key: gguf-qwen25-05b-q4km-74a4da8c
+          key: gguf-qwen25-15b-q4km-6a1a2eb6
 
       - name: Windows CI (build, test, pack, gguf, WS)
         shell: pwsh

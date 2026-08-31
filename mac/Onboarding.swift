@@ -85,7 +85,7 @@ enum OnboardingWindow {
         default:
             window?.title = "LensTrans 引导 3/3 — 本地引擎"
             body?.stringValue =
-                "默认使用官方 Qwen2.5-0.5B Instruct Q4_K_M（约 491MB）。\n" +
+                "默认使用官方 Qwen2.5-1.5B Instruct Q4_K_M（约 1.12GB）。\n" +
                 "勾选后将按需下载（断点续传 + SHA256）；已存在且校验通过则跳过。\n" +
                 "云端 Base URL / API Key / Model 全部留空。\n\n" +
                 "下载失败不阻塞完成（仍可稍后仅用云端，需自行配置）。"
@@ -128,12 +128,12 @@ private final class OnbProxy: NSObject {
 
 /// First-run GGUF download (Range + SHA256). Parity with win/app/model_download.cpp.
 enum MacModelDownload {
-    static let expectedBytes: UInt64 = 491400032
-    static let expectedSha256 = "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db"
-    static let fileName = "qwen2.5-0.5b-instruct-q4_k_m.gguf"
+    static let expectedBytes: UInt64 = 1117320736
+    static let expectedSha256 = "6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e"
+    static let fileName = "qwen2.5-1.5b-instruct-q4_k_m.gguf"
     static let urls = [
-        "https://www.modelscope.cn/models/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/master/qwen2.5-0.5b-instruct-q4_k_m.gguf",
-        "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf",
+        "https://www.modelscope.cn/models/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/master/qwen2.5-1.5b-instruct-q4_k_m.gguf",
+        "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf",
     ]
 
     @MainActor

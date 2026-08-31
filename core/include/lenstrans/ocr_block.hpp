@@ -39,6 +39,7 @@ struct OcrBlock {
   ColorRgb color{};
   ColorRgb background{255, 255, 255};
   float bg_variance = 0;
+  std::vector<BBox> mask_boxes;
 };
 
 struct OcrMergeOptions {

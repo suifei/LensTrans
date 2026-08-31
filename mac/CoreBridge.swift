@@ -13,6 +13,10 @@ enum MacCoreBridge {
 
     struct Layout {
         var rect: CGRect
+        var text: String
+        var sourceText: String
+        var sourceLineHeight: CGFloat
+        var coverRects: [CGRect]
         var fontSize: CGFloat
         var fontWeight: Int
         var lineHeight: CGFloat
@@ -21,6 +25,7 @@ enum MacCoreBridge {
         var mode: MacPresentMode
         var coversSource: Bool
         var showSource: Bool
+        var centerTextVertically: Bool
         var textColor: (red: CGFloat, green: CGFloat, blue: CGFloat)
         var fillColor: (red: CGFloat, green: CGFloat, blue: CGFloat)
     }
@@ -132,7 +137,8 @@ enum MacCoreBridge {
         }
     }
 
-    static func batchOutputUsable(blocks: [MacOcrBlock], output: String) -> Bool {
+    static func batchOutputUsable(blocks: [MacOcrBlock], output: String,
+                                  targetLanguage: String) -> Bool {
         guard let batch = lenstrans_core_batch_create() else { return false }
         defer { lenstrans_core_batch_destroy(batch) }
         for block in blocks {
@@ -141,7 +147,30 @@ enum MacCoreBridge {
             }
             if ok == 0 { return false }
         }
-        return output.withCString { lenstrans_core_batch_output_usable(batch, $0) != 0 }
+        return output.withCString { outputPtr in
+            targetLanguage.withCString {
+                lenstrans_core_batch_output_usable(batch, outputPtr, $0) != 0
+            }
+        }
+    }
+
+    static func translationUsable(source: String, translation: String,
+                                  targetLanguage: String) -> Bool {
+        source.withCString { sourcePtr in
+            translation.withCString { translationPtr in
+                targetLanguage.withCString { targetPtr in
+                    lenstrans_core_translation_usable(sourcePtr, translationPtr, targetPtr) != 0
+                }
+            }
+        }
+    }
+
+    static func sourceNeedsTranslation(_ source: String, targetLanguage: String) -> Bool {
+        source.withCString { sourcePtr in
+            targetLanguage.withCString { targetPtr in
+                lenstrans_core_source_needs_translation(sourcePtr, targetPtr) != 0
+            }
+        }
     }
 
     static var batchFallbackGroupSize: Int {
@@ -182,25 +211,15 @@ enum MacCoreBridge {
 
     static func layout(block: MacOcrBlock, translation: String, frameSize: CGSize,
                        targetSize: CGSize, contrast: Bool, render: String,
-                       stickerAlpha: Int, fontScale: Int) -> Layout? {
+                       stickerAlpha: Int, fontScale: Int,
+                       targetPixelsPerUnit: CGFloat) -> Layout? {
         guard frameSize.width > 0, frameSize.height > 0,
               targetSize.width > 0, targetSize.height > 0,
               !block.text.isEmpty, !translation.isEmpty else { return nil }
 
-        var input = LenstransCoreBlock()
+        var input = coreBlock(block)
         var output = LenstransCoreLayout()
-        input.x = block.x
-        input.y = block.y
-        input.width = block.w
-        input.height = block.h
-        input.line_height = block.lineHeight
-        input.red = block.r
-        input.green = block.g
-        input.blue = block.b
-        input.background_red = block.r
-        input.background_green = block.g
-        input.background_blue = block.b
-        input.background_variance = block.bgVariance
+        var wrapped = [CChar](repeating: 0, count: 16 * 1024)
 
         let lock: Int32
         switch render {
@@ -217,26 +236,111 @@ enum MacCoreBridge {
                     Int32(max(1, Int(frameSize.height.rounded()))),
                     Int32(max(1, Int(targetSize.width.rounded()))),
                     Int32(max(1, Int(targetSize.height.rounded()))),
-                    contrast ? 1 : 0, lock, Int32(stickerAlpha), Int32(fontScale), &output
+                    contrast ? 1 : 0, lock, Int32(stickerAlpha), Int32(fontScale),
+                    Float(targetPixelsPerUnit), &output, &wrapped, wrapped.count
                 )
             }
         }
         guard ok != 0 else { return nil }
+        return decodeLayout(output, wrapped: wrapped, source: block.text)
+    }
+
+    static func layouts(blocks: [MacOcrBlock], translations: [String],
+                        frameSize: CGSize, targetSize: CGSize, contrast: Bool,
+                        render: String, stickerAlpha: Int, fontScale: Int,
+                        targetPixelsPerUnit: CGFloat) -> [Layout] {
+        guard !blocks.isEmpty, blocks.count == translations.count,
+              frameSize.width > 0, frameSize.height > 0,
+              targetSize.width > 0, targetSize.height > 0 else { return [] }
+        let lock: Int32 = render == "sticker" ? 1 : render == "immersive" ? 2 : 0
+        guard let batch = lenstrans_core_present_batch_create(
+            Int32(max(1, Int(frameSize.width.rounded()))),
+            Int32(max(1, Int(frameSize.height.rounded()))),
+            Int32(max(1, Int(targetSize.width.rounded()))),
+            Int32(max(1, Int(targetSize.height.rounded()))),
+            contrast ? 1 : 0, lock, Int32(stickerAlpha), Int32(fontScale),
+            Float(targetPixelsPerUnit)) else { return [] }
+        defer { lenstrans_core_present_batch_destroy(batch) }
+        for index in blocks.indices {
+            var input = coreBlock(blocks[index])
+            let added = blocks[index].text.withCString { source in
+                input.text = source
+                return translations[index].withCString { translated in
+                    lenstrans_core_present_batch_add(batch, &input, translated)
+                }
+            }
+            if added == 0 { return [] }
+            for mask in blocks[index].masks {
+                _ = lenstrans_core_present_batch_add_mask(
+                    batch, Float(mask.minX), Float(mask.minY),
+                    Float(mask.width), Float(mask.height))
+            }
+        }
+        let count = Int(lenstrans_core_present_batch_build(batch))
+        var result: [Layout] = []
+        result.reserveCapacity(count)
+        for index in 0..<count {
+            var output = LenstransCoreLayout()
+            var wrapped = [CChar](repeating: 0, count: 16 * 1024)
+            var source = [CChar](repeating: 0, count: 16 * 1024)
+            let ok = lenstrans_core_present_batch_get(
+                batch, index, &output, &wrapped, wrapped.count, &source, source.count)
+            if ok != 0 {
+                var covers: [CGRect] = []
+                let coverCount = Int(lenstrans_core_present_batch_cover_count(batch, index))
+                covers.reserveCapacity(coverCount)
+                for coverIndex in 0..<coverCount {
+                    var x: Float = 0, y: Float = 0, width: Float = 0, height: Float = 0
+                    if lenstrans_core_present_batch_cover_get(
+                        batch, index, coverIndex, &x, &y, &width, &height) != 0 {
+                        covers.append(CGRect(x: CGFloat(x), y: CGFloat(y),
+                                             width: CGFloat(width), height: CGFloat(height)))
+                    }
+                }
+                result.append(decodeLayout(output, wrapped: wrapped,
+                                           source: String(cString: source), coverRects: covers))
+            }
+        }
+        return result
+    }
+
+    private static func coreBlock(_ block: MacOcrBlock) -> LenstransCoreBlock {
+        var input = LenstransCoreBlock()
+        input.x = block.x; input.y = block.y
+        input.width = block.w; input.height = block.h
+        input.line_height = block.lineHeight
+        input.red = block.r; input.green = block.g; input.blue = block.b
+        input.background_red = block.r
+        input.background_green = block.g
+        input.background_blue = block.b
+        input.background_variance = block.bgVariance
+        return input
+    }
+
+    private static func decodeLayout(_ output: LenstransCoreLayout,
+                                     wrapped: [CChar], source: String,
+                                     coverRects: [CGRect] = []) -> Layout {
         let mode: MacPresentMode
         switch output.mode {
         case Int32(LT_PRESENT_STICKER): mode = .sticker
         case Int32(LT_PRESENT_STICKER_CONTRAST): mode = .stickerContrast
         default: mode = .immersive
         }
+        let rect = CGRect(x: CGFloat(output.x), y: CGFloat(output.y),
+                          width: CGFloat(output.width), height: CGFloat(output.height))
         return Layout(
-            rect: CGRect(x: CGFloat(output.x), y: CGFloat(output.y),
-                         width: CGFloat(output.width), height: CGFloat(output.height)),
+            rect: rect,
+            text: String(cString: wrapped),
+            sourceText: source,
+            sourceLineHeight: CGFloat(output.source_line_height),
+            coverRects: coverRects.isEmpty ? [rect] : coverRects,
             fontSize: CGFloat(output.font_px), fontWeight: Int(output.font_weight),
             lineHeight: CGFloat(output.line_height_px),
             textInset: CGSize(width: CGFloat(output.text_inset_x),
                               height: CGFloat(output.text_inset_y)),
             cornerRadius: CGFloat(output.corner_radius),
             mode: mode, coversSource: output.covers_source != 0, showSource: output.show_source != 0,
+            centerTextVertically: output.center_text_vertically != 0,
             textColor: (CGFloat(output.text_red) / 255, CGFloat(output.text_green) / 255,
                         CGFloat(output.text_blue) / 255),
             fillColor: (CGFloat(output.fill_red) / 255, CGFloat(output.fill_green) / 255,
@@ -255,5 +359,33 @@ enum MacCoreBridge {
         }
         guard ok != 0 else { return nil }
         return String(cString: output)
+    }
+
+    static func outputTokenBudget(text: String, batchProtocol: Bool, quality: Bool) -> Int {
+        text.withCString {
+            Int(lenstrans_core_output_token_budget($0, batchProtocol ? 1 : 0, quality ? 1 : 0))
+        }
+    }
+
+    static func localEnginePrompt(text: String, sourceLanguage: String,
+                                  targetLanguage: String, batchProtocol: Bool,
+                                  modelPath: String) -> String? {
+        var output = [CChar](repeating: 0, count: 32 * 1024)
+        let ok = text.withCString { textPtr in
+            sourceLanguage.withCString { sourcePtr in
+                targetLanguage.withCString { targetPtr in
+                    modelPath.withCString { modelPtr in
+                        lenstrans_core_build_local_engine_prompt(
+                            textPtr, sourcePtr, targetPtr, batchProtocol ? 1 : 0,
+                            modelPtr, &output, output.count)
+                    }
+                }
+            }
+        }
+        return ok != 0 ? String(cString: output) : nil
+    }
+
+    static func isHunyuanModel(path: String) -> Bool {
+        path.withCString { lenstrans_core_is_hunyuan_model_path($0) != 0 }
     }
 }

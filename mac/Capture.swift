@@ -191,9 +191,21 @@ final class OverlayCapture {
         let crop = cropPoints
         let needsSoftwareCrop: Bool = {
             guard let display else { return false }
-            let displayPx = display.width * display.height
-            let bufPx = fullW * fullH
-            return bufPx > displayPx / 2 && crop.width * crop.height < CGFloat(displayPx) * 0.5
+            let requestedScale = Self.pointToPixelScale(for: display)
+            let expectedW = max(16, Int((crop.width * requestedScale).rounded()))
+            let expectedH = max(16, Int((crop.height * requestedScale).rounded()))
+            let toleranceW = max(2, Int(Double(expectedW) * 0.02))
+            let toleranceH = max(2, Int(Double(expectedH) * 0.02))
+            let matchesConfiguredRoi = abs(fullW - expectedW) <= toleranceW
+                && abs(fullH - expectedH) <= toleranceH
+            if matchesConfiguredRoi { return false }
+
+            // Only crop in software when ScreenCaptureKit actually returned a full-display
+            // frame. Comparing buffer area to logical display area misclassifies a valid 2x
+            // Retina ROI and crops it a second time.
+            let fullScaleX = CGFloat(fullW) / max(1, CGFloat(display.width))
+            let fullScaleY = CGFloat(fullH) / max(1, CGFloat(display.height))
+            return fullScaleX >= 0.90 && fullScaleY >= 0.90
         }()
 
         if !needsSoftwareCrop {

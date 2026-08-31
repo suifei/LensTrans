@@ -79,7 +79,7 @@ static int RunOne(lenstrans::IEngine* eng, bool quality, const char* src, const 
   if (!r.error.empty() || r.text.empty() || !HasCjk(r.text)) return 1;
   if (quality && r.beam_width != 2) return 1;
   if (r.first_token_ms > 800) return 1;
-  if (ws > 550.0) return 1;
+  if (ws > 1800.0) return 1;
   return 0;
 }
 
@@ -93,7 +93,7 @@ static int RunQualitySuite(lenstrans::IEngine* eng, const char* outp, const char
   std::ofstream f(outp, std::ios::binary);
   if (f) {
     f << title << "\n\n"
-      << "- model: qwen2.5-0.5b-instruct-q4_k_m.gguf\n"
+      << "- model: qwen2.5-1.5b-instruct-q4_k_m.gguf\n"
       << "- beam: 1 (greedy)\n"
       << "- note: record output as-is. Literal or wrong translations are expected on 0.5B.\n\n"
       << "| # | kind | words | first_ms | total_ms | ws_mib | src | hyp |\n"
@@ -133,7 +133,7 @@ static int RunQualitySuite(lenstrans::IEngine* eng, const char* outp, const char
   if (f) {
     f << "\n- engine_hard_fail_rows: " << engine_fail << "\n"
       << "- max_ws_mib: " << max_ws << "\n"
-      << "- ws_le_550: " << (max_ws <= 550.0 ? "yes" : "no") << "\n"
+      << "- ws_le_1800: " << (max_ws <= 1800.0 ? "yes" : "no") << "\n"
       << "- this is Goal test evidence, not W1 acceptance.\n";
   }
   std::printf("%s wrote %s engine_hard_fail=%d max_ws=%.1f\n", title, outp, engine_fail, max_ws);
@@ -178,7 +178,7 @@ static int RunFlores50(lenstrans::IEngine* eng) {
   std::ofstream f(outp.c_str(), std::ios::binary);
   if (f) {
     f << "# FLORES-50 greedy EN-ZH (not W1)\n\n"
-      << "- model: qwen2.5-0.5b-instruct-q4_k_m.gguf\n"
+      << "- model: qwen2.5-1.5b-instruct-q4_k_m.gguf\n"
       << "- source: FLORES-200 dev eng_Latn / zho_Hans (first " << n << " lines)\n"
       << "- beam: 1 (greedy)\n"
       << "- note: record output as-is; not W1 acceptance; no COMET/BLEU.\n\n"
@@ -206,7 +206,7 @@ static int RunFlores50(lenstrans::IEngine* eng) {
     f << "\n- sentences: " << n << "\n"
       << "- engine_hard_fail_rows: " << engine_fail << "\n"
       << "- max_ws_mib: " << max_ws << "\n"
-      << "- ws_le_550: " << (max_ws <= 550.0 ? "yes" : "no") << "\n"
+      << "- ws_le_1800: " << (max_ws <= 1800.0 ? "yes" : "no") << "\n"
       << "- this is Goal test evidence, not W1 acceptance.\n";
   }
   if (!f) {
@@ -329,7 +329,7 @@ int main(int argc, char** argv) {
   std::ofstream f(outp.c_str(), std::ios::binary);
   if (f) {
     f << "# beam=2 smoke (2026-08-30, in-process llama.cpp b10688)\n\n"
-      << "- model: qwen2.5-0.5b-instruct-q4_k_m.gguf\n"
+      << "- model: qwen2.5-1.5b-instruct-q4_k_m.gguf\n"
       << "- prompt: It's on the house. → zh\n"
       << "- " << greedy << "\n"
       << "- " << beam << "\n"

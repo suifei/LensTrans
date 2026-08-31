@@ -98,23 +98,30 @@ struct OverlayBox {
   bool e2e_saw_ocr = false;
   bool e2e_saw_present = false;
   bool e2e_saw_cover = false;
+  bool partial_translation = false;
+  int partial_attempts = 0;
+  std::string partial_signature;
+  std::chrono::steady_clock::time_point partial_retry_at{};
   std::string e2e_sample_src;
   int fallback_ticks = 0;
 };
 
 struct App {
   std::mutex boxes_mu;
+  std::mutex engine_mu;
   std::vector<std::unique_ptr<OverlayBox>> boxes;
   lenstrans::Settings settings;
   std::string api_key;
   lenstrans::TranslationCache cache;
   std::unique_ptr<lenstrans::IEngine> local;
+  std::unique_ptr<lenstrans::IEngine> local_fallback;
   std::unique_ptr<lenstrans::IEngine> cloud;
   lenstrans::win::AppHooks hooks;
   HWND hidden = nullptr;
   std::atomic<bool> run{true};
   std::atomic<bool> paused{false};
   std::atomic<bool> boxes_visible{true};
+  std::thread prewarm;
   std::thread worker;
   bool demo_edit = false;
   std::chrono::steady_clock::time_point demo_until{};
@@ -401,16 +408,16 @@ void DrawUtf8(HDC hdc, int x, int y, int w, int h, const std::string& utf8, COLO
 }
 
 void DrawUtf8Fit(HDC hdc, int x, int y, int w, int h, const std::string& utf8, COLORREF color,
-                 int preferred_px, int font_weight = 400) {
+                 int preferred_px, int font_weight = 400, bool center_vertically = true) {
   if (utf8.empty() || w <= 2 || h <= 2) return;
   const int n = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()), nullptr, 0);
   if (n <= 0) return;
   std::wstring ws(static_cast<std::size_t>(n), 0);
   MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()), ws.data(), n);
-  const int upper = std::max(8, std::min(48, preferred_px > 0 ? preferred_px : h * 3 / 4));
+  const int upper = std::max(1, std::min(48, preferred_px > 0 ? preferred_px : h * 3 / 4));
   HFONT chosen = nullptr;
-  int chosen_px = 8;
-  for (int px = upper; px >= 8; --px) {
+  int chosen_px = 1;
+  for (int px = upper; px >= 1; --px) {
     HFONT f = CreateFontW(-px, 0, 0, 0, font_weight, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                           OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                           DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
@@ -442,7 +449,7 @@ void DrawUtf8Fit(HDC hdc, int x, int y, int w, int h, const std::string& utf8, C
   DrawTextW(hdc, ws.c_str(), n, &measured,
             DT_LEFT | DT_WORDBREAK | DT_NOPREFIX | DT_EDITCONTROL | DT_CALCRECT);
   const int text_h = measured.bottom - measured.top;
-  const int draw_y = y + std::max(0, (h - text_h) / 2);
+  const int draw_y = center_vertically ? y + std::max(0, (h - text_h) / 2) : y;
   RECT rc{x, draw_y, x + w, y + h};
   DrawTextW(hdc, ws.c_str(), n, &rc,
             DT_LEFT | DT_WORDBREAK | DT_NOPREFIX | DT_EDITCONTROL);
@@ -561,9 +568,21 @@ void PaintBox(OverlayBox* box) {
     const int target_h = contrast ? std::max(8, bh * 2 / 3) : bh;
     const uint8_t fill_alpha = static_cast<uint8_t>(std::round(
         std::max(0.0f, std::min(1.0f, p.background_alpha)) * 255.0f));
-    BlendRoundedRect(px, w, x, y, x + bw, y + bh, w, h,
-                     static_cast<int>(std::round(p.corner_radius)), fill_alpha,
-                     static_cast<uint8_t>(br), static_cast<uint8_t>(bg), static_cast<uint8_t>(bb));
+    if (p.mode == lenstrans::PresentMode::Immersive && !p.cover_rects.empty()) {
+      for (const auto& mask : p.cover_rects) {
+        BlendRoundedRect(px, w, static_cast<int>(std::floor(mask.x)),
+                         static_cast<int>(std::floor(mask.y)),
+                         static_cast<int>(std::ceil(mask.x + mask.w)),
+                         static_cast<int>(std::ceil(mask.y + mask.h)), w, h, 0, fill_alpha,
+                         static_cast<uint8_t>(br), static_cast<uint8_t>(bg),
+                         static_cast<uint8_t>(bb));
+      }
+    } else {
+      BlendRoundedRect(px, w, x, y, x + bw, y + bh, w, h,
+                       static_cast<int>(std::round(p.corner_radius)), fill_alpha,
+                       static_cast<uint8_t>(br), static_cast<uint8_t>(bg),
+                       static_cast<uint8_t>(bb));
+    }
     const auto text_color = lenstrans::AccessibleTextColor(p.source.background);
     const int tr = text_color.r, tg = text_color.g, tb = text_color.b;
     std::string joined;
@@ -575,10 +594,11 @@ void PaintBox(OverlayBox* box) {
     const int inset_y = static_cast<int>(std::round(p.text_inset_y));
     DrawUtf8Fit(mem, x + inset_x, y + inset_y, bw - inset_x * 2,
                 target_h - inset_y * 2, joined, RGB(tr, tg, tb),
-                static_cast<int>(std::round(p.font_px)), p.font_weight);
+                static_cast<int>(std::round(p.font_px)), p.font_weight,
+                p.center_text_vertically);
     if (contrast) {
       DrawUtf8Fit(mem, x + 4, y + target_h, bw - 8, bh - target_h - 2, p.source.text,
-                  RGB(200, 200, 200), std::max(8, static_cast<int>(p.font_px * 0.55f)), 400);
+                  RGB(200, 200, 200), std::max(1, static_cast<int>(p.font_px * 0.55f)), 400);
     }
     FixAlpha(px, w, h, x, y, x + bw, y + bh);
   };
@@ -755,6 +775,7 @@ void RegisterAppHotkeys() {
 }
 
 void EnsureEngines() {
+  std::lock_guard<std::mutex> lock(g.engine_mu);
   if (g.e2e_sec > 0 && !g.e2e_llama) {
     if (!g.local) g.local = lenstrans::MakeFakeEngine(lenstrans::EngineKind::Local, true, "你好 设置", "");
     return;
@@ -763,19 +784,45 @@ void EnsureEngines() {
     const std::string model = FindModel();
     if (g.e2e_llama) LogA(std::string("E2E llama model=") + model + "\n");
     g.local = lenstrans::MakeLocalEngine(model, FindCli());
+    const std::string fallback = lenstrans::FindFallbackModelPath(model);
+    if (lenstrans::IsHunyuanMtModelPath(model) && !fallback.empty())
+      g.local_fallback = lenstrans::MakeLocalEngine(fallback, FindCli());
   }
   if (g.e2e_sec == 0)
     g.cloud = lenstrans::MakeCloudEngine(g.settings.cloud_base_url, g.api_key, g.settings.cloud_model);
+}
+
+void PrewarmLocalEngine() {
+  EnsureEngines();
+  std::lock_guard<std::mutex> lock(g.engine_mu);
+  if (g.local) {
+    const bool ready = g.local->Preload();
+    LogA(ready ? "MODEL prewarm ready\n" : "MODEL prewarm unavailable\n");
+  }
 }
 
 void TranslateCommitted(OverlayBox* box, const std::vector<lenstrans::OcrBlock>& blocks) {
   EnsureEngines();
   box->state = lenstrans::BoxState::Translating;
   lenstrans::TranslateRequest req;
-  req.text = lenstrans::BuildBatchSource(blocks);
   req.src_lang = box->src_lang.empty() ? g.settings.src_lang : box->src_lang;
   req.tgt_lang = box->tgt_lang.empty() ? g.settings.tgt_lang : box->tgt_lang;
-  req.quality = g.settings.quality;
+  std::vector<std::size_t> translation_indices;
+  std::vector<lenstrans::OcrBlock> translation_blocks;
+  for (std::size_t i = 0; i < blocks.size(); ++i) {
+    if (!lenstrans::SourceNeedsTranslationForTarget(blocks[i].text, req.tgt_lang)) continue;
+    translation_indices.push_back(i);
+    translation_blocks.push_back(blocks[i]);
+  }
+  if (translation_blocks.empty()) {
+    box->state = lenstrans::BoxState::Watching;
+    return;
+  }
+  req.text = lenstrans::BuildBatchSource(translation_blocks);
+  const std::string source_signature = lenstrans::Debounce::Sig(blocks);
+  const bool retrying_partial = box->partial_translation &&
+                                box->partial_signature == source_signature;
+  req.quality = g.settings.quality || retrying_partial;
   req.batch_protocol = true;
   lenstrans::Settings per = g.settings;
   per.engine = box->engine;
@@ -799,29 +846,78 @@ void TranslateCommitted(OverlayBox* box, const std::vector<lenstrans::OcrBlock>&
       g.e2e_sample_hyp = result.text;
     }
   }
-  auto outs = lenstrans::ParseBatchTranslation(result.text, blocks.size());
-  bool batch_usable = lenstrans::BatchTranslationUsable(blocks, result.text);
+  const auto parsed_batch = lenstrans::ParseBatchTranslation(result.text, translation_blocks.size());
+  std::vector<std::string> outs(blocks.size());
+  for (std::size_t i = 0; i < parsed_batch.size() && i < translation_indices.size(); ++i)
+    outs[translation_indices[i]] = parsed_batch[i];
   constexpr std::size_t kBatchFallbackGroup = 3;
-  if (!batch_usable && blocks.size() > kBatchFallbackGroup) {
-    std::size_t usable_groups = 0;
-    const auto ranges = lenstrans::BatchRanges(blocks.size(), kBatchFallbackGroup);
-    for (const auto& range : ranges) {
-      const std::vector<lenstrans::OcrBlock> group(blocks.begin() + range.first,
-                                                   blocks.begin() + range.second);
+  std::vector<std::size_t> repair_indices;
+  for (const auto i : translation_indices) {
+    if (!lenstrans::TranslationUsableForTarget(blocks[i].text, outs[i], req.tgt_lang))
+      repair_indices.push_back(i);
+  }
+  if (!repair_indices.empty()) {
+    for (std::size_t begin = 0; begin < repair_indices.size(); begin += kBatchFallbackGroup) {
+      const std::size_t end = (std::min)(repair_indices.size(), begin + kBatchFallbackGroup);
+      std::vector<lenstrans::OcrBlock> group;
+      group.reserve(end - begin);
+      for (std::size_t i = begin; i < end; ++i) group.push_back(blocks[repair_indices[i]]);
       lenstrans::TranslateRequest group_req = req;
       group_req.text = lenstrans::BuildBatchSource(group);
       const auto group_result = lenstrans::DispatchTranslate(
           per, g.local.get(), g.cloud.get(), &g.cache, group_req);
-      if (lenstrans::BatchTranslationUsable(group, group_result.text)) ++usable_groups;
       const auto parsed = lenstrans::ParseBatchTranslation(group_result.text, group.size());
-      for (std::size_t i = 0; i < parsed.size(); ++i) outs[range.first + i] = parsed[i];
+      for (std::size_t i = 0; i < parsed.size(); ++i) {
+        const auto original = repair_indices[begin + i];
+        if (lenstrans::TranslationUsableForTarget(blocks[original].text, parsed[i], req.tgt_lang))
+          outs[original] = parsed[i];
+      }
     }
-    batch_usable = lenstrans::BatchFallbackUsable(ranges.size(), usable_groups);
-    LogA("TR batch fallback groups=" +
-         std::to_string(ranges.size()) + " usable=" + std::to_string(usable_groups) + "\n");
+    LogA("TR batch repair blocks=" + std::to_string(repair_indices.size()) + "\n");
   }
-  if (!batch_usable && !(g.e2e_sec > 0 && !g.e2e_llama)) {
+  if (g.local_fallback) {
+    std::vector<std::size_t> residual;
+    std::vector<lenstrans::OcrBlock> fallback_blocks;
+    for (const auto i : translation_indices) {
+      if (lenstrans::TranslationUsableForTarget(blocks[i].text, outs[i], req.tgt_lang)) continue;
+      residual.push_back(i);
+      fallback_blocks.push_back(blocks[i]);
+    }
+    if (!fallback_blocks.empty()) {
+      lenstrans::TranslateRequest fallback_req = req;
+      fallback_req.text = lenstrans::BuildBatchSource(fallback_blocks);
+      fallback_req.quality = true;
+      const auto fallback_result = g.local_fallback->Translate(fallback_req);
+      const auto parsed = lenstrans::ParseBatchTranslation(
+          fallback_result.text, fallback_blocks.size());
+      for (std::size_t i = 0; i < parsed.size() && i < residual.size(); ++i) {
+        const auto original = residual[i];
+        if (lenstrans::TranslationUsableForTarget(
+                blocks[original].text, parsed[i], req.tgt_lang))
+          outs[original] = parsed[i];
+      }
+      LogA("TR LLM fallback blocks=" + std::to_string(fallback_blocks.size()) + "\n");
+    }
+  }
+  std::size_t usable_count = 0;
+  std::size_t remaining_required = 0;
+  for (std::size_t i = 0; i < outs.size(); ++i) {
+    if (!lenstrans::TranslationUsableForTarget(blocks[i].text, outs[i], req.tgt_lang))
+      outs[i].clear();
+    else
+      ++usable_count;
+    if (lenstrans::SourceNeedsTranslationForTarget(blocks[i].text, req.tgt_lang) &&
+        outs[i].empty())
+      ++remaining_required;
+  }
+  if (usable_count == 0 && !(g.e2e_sec > 0 && !g.e2e_llama)) {
     LogA("TR batch unusable: refusing coordinate-misaligned paint\n");
+    box->state = lenstrans::BoxState::Watching;
+    box->partial_translation = true;
+    box->partial_signature = source_signature;
+    box->partial_attempts = retrying_partial ? box->partial_attempts + 1 : 1;
+    box->partial_retry_at = std::chrono::steady_clock::now() +
+                            std::chrono::seconds(box->partial_attempts < 3 ? 3 : 30);
     return;
   }
   for (size_t i = 0; i < blocks.size(); ++i) {
@@ -852,6 +948,17 @@ void TranslateCommitted(OverlayBox* box, const std::vector<lenstrans::OcrBlock>&
     std::lock_guard<std::mutex> lock(box->mu);
     box->translations = std::move(outs);
     box->committed = blocks;
+    if (remaining_required == 0) {
+      box->partial_translation = false;
+      box->partial_attempts = 0;
+      box->partial_signature.clear();
+    } else {
+      box->partial_translation = true;
+      box->partial_signature = source_signature;
+      box->partial_attempts = retrying_partial ? box->partial_attempts + 1 : 1;
+      box->partial_retry_at = std::chrono::steady_clock::now() +
+                              std::chrono::seconds(box->partial_attempts < 3 ? 3 : 30);
+    }
     box->state = g.paused.load() ? lenstrans::BoxState::Paused : lenstrans::BoxState::Watching;
   }
   PostMessageW(box->hwnd, kPaintMsg, 0, 0);
@@ -1035,7 +1142,11 @@ void WorkerLoop() {
       } else if (!box->stab.Feed(blocks, committed)) {
         continue;
       }
-      if (e2e_fast || box->debounce.Tick(committed, now, 300)) TranslateCommitted(box, committed);
+      const bool retry_due = box->partial_translation &&
+                             box->partial_signature == lenstrans::Debounce::Sig(committed) &&
+                             now >= box->partial_retry_at;
+      if (e2e_fast || retry_due || box->debounce.Tick(committed, now, 300))
+        TranslateCommitted(box, committed);
     }
   }
 }
@@ -1189,7 +1300,7 @@ void OnTray(lenstrans::win::TrayCmd cmd) {
       lenstrans::win::ShowSettingsWindow(g.hidden, g.hooks);
       break;
     case lenstrans::win::TrayCmd::Update:
-      MessageBoxW(g.hidden, L"检查更新：本版本不联网自动更新。当前 0.2 / Qwen2.5-0.5B Q4_K_M。",
+      MessageBoxW(g.hidden, L"检查更新：本版本不联网自动更新。当前 0.3.0 / Qwen2.5-1.5B Q4_K_M。",
                   L"LensTrans", MB_OK);
       break;
     case lenstrans::win::TrayCmd::ClearCache:
@@ -1642,7 +1753,7 @@ void WriteE2eArtifacts() {
       << log << "```\n";
     return;
   }
-  f << (g.e2e_llama ? "# Overlay e2e llama (LocalEngine Qwen2.5-0.5B)\n\n"
+  f << (g.e2e_llama ? "# Overlay e2e llama (LocalEngine default model)\n\n"
         : g.e2e_contrast ? "# Overlay e2e contrast (StickerContrast + show_source)\n\n"
                          : "# Overlay e2e (cover source text)\n\n")
     << "- date: 2026-08-30\n"
@@ -1927,6 +2038,7 @@ int Run() {
       lenstrans::win::InitTray(g.hidden, g.hooks);
       if (!e2e_hotkey_probe) {
         EnsureEngines();
+        g.prewarm = std::thread(PrewarmLocalEngine);
         g.worker = std::thread(WorkerLoop);
       }
     }
@@ -1971,6 +2083,7 @@ int Run() {
     DispatchMessageW(&msg);
   }
   g.run = false;
+  if (g.prewarm.joinable()) g.prewarm.join();
   if (g.worker.joinable()) g.worker.join();
   if (e2e && g.e2e_log.find("# Overlay") == std::string::npos) WriteE2eArtifacts();
   if (e2e_hotkey_probe && !g.hotkey_probe_done) {

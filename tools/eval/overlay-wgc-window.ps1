@@ -8,7 +8,7 @@ $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $TargetExe = Join-Path $Root "build\Release\lenstrans_e2e_target.exe"
 $OverlayExe = Join-Path $Root "build\Release\lenstrans_overlay.exe"
 $Out = Join-Path $Root "tools\eval\out\overlay-wgc-window.md"
-$Model = Join-Path $Root "models\qwen2.5-0.5b-instruct-q4_k_m.gguf"
+$Model = Join-Path $Root "models\qwen2.5-1.5b-instruct-q4_k_m.gguf"
 if (-not (Test-Path $TargetExe)) { throw "missing $TargetExe — build lenstrans_e2e_target" }
 if (-not (Test-Path $OverlayExe)) { throw "missing $OverlayExe — build lenstrans_overlay" }
 

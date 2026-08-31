@@ -30,6 +30,18 @@ struct LensTransMacApp {
         TrayController.shared.onToggleTranslation = { OverlayBoxStore.shared.toggleTranslation() }
         TrayController.shared.onPause = { OverlayBoxStore.shared.pauseAll() }
 
+        Task { @MainActor in
+            let started = Date()
+            let modelPath = MacPaths.resolveModelPath()
+            let cliPath = MacPaths.findLlamaCli()
+            let ready = await MacLocalEnginePool.shared.prewarm(
+                modelPath: modelPath, cliPath: cliPath)
+            if ProcessInfo.processInfo.environment["LENSTRANS_RUNTIME_LOG"] == "1" {
+                let elapsed = Int(Date().timeIntervalSince(started) * 1000)
+                fputs("[LensTrans] model.prewarm ready=\(ready) latencyMs=\(elapsed)\n", stderr)
+            }
+        }
+
         let startWatching = argv.contains("--start-watching")
         if FirstRun.needsOnboarding && !noOnboard {
             OnboardingWindow.present()

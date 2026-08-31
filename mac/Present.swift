@@ -27,6 +27,9 @@ struct MacPresentBlock {
     var stickerAlpha: CGFloat
     var fontSize: CGFloat = 0
     var fontWeight: Int = 400
+    var lineHeight: CGFloat = 0
+    var centerTextVertically = true
+    var coverRects: [CGRect] = []
     var textInset = CGSize(width: 3, height: 2)
     var cornerRadius: CGFloat = 2
 }
@@ -54,14 +57,21 @@ enum MacPresent {
     static func paint(mode: MacPresentMode, text: String, source: String?,
                       fill: NSColor, textColor: NSColor, stickerAlpha: CGFloat,
                       in bounds: CGRect, ctx: CGContext, maxFont: CGFloat? = nil,
-                      fontWeight: Int = 400, textInset: CGSize = CGSize(width: 3, height: 2),
+                      fontWeight: Int = 400, lineHeight: CGFloat = 0,
+                      centerTextVertically: Bool = true,
+                      coverRects: [CGRect] = [],
+                      textInset: CGSize = CGSize(width: 3, height: 2),
                       cornerRadius: CGFloat = 2) {
         guard bounds.width > 2, bounds.height > 2 else { return }
         ctx.saveGState()
-        let rounded = CGPath(roundedRect: bounds, cornerWidth: cornerRadius,
-                             cornerHeight: cornerRadius, transform: nil)
-        ctx.addPath(rounded)
-        ctx.clip()
+        if mode == .immersive {
+            ctx.clip(to: bounds)
+        } else {
+            let rounded = CGPath(roundedRect: bounds, cornerWidth: cornerRadius,
+                                 cornerHeight: cornerRadius, transform: nil)
+            ctx.addPath(rounded)
+            ctx.clip()
+        }
         defer { ctx.restoreGState() }
 
         var tr = Int((textColor.usingColorSpace(.deviceRGB)?.redComponent ?? 0) * 255)
@@ -89,54 +99,87 @@ enum MacPresent {
         switch mode {
         case .immersive:
             ctx.setFillColor(fill.withAlphaComponent(1).cgColor)
-            ctx.fill(bounds)
+            let masks = coverRects.isEmpty ? [bounds] : coverRects
+            for mask in masks {
+                let clipped = mask.intersection(bounds)
+                if !clipped.isNull { ctx.fill(clipped) }
+            }
             drawString(text, color: safeText, in: targetRect, ctx: ctx, maxFont: maxFont,
-                       fontWeight: fontWeight, textInset: textInset)
+                       fontWeight: fontWeight, lineHeight: lineHeight,
+                       centerVertically: centerTextVertically, textInset: textInset)
         case .sticker, .stickerContrast:
             _ = stickerAlpha
             ctx.setFillColor(fill.withAlphaComponent(1).cgColor)
             ctx.fill(bounds)
             drawString(text, color: safeText, in: targetRect, ctx: ctx, maxFont: maxFont,
-                       fontWeight: fontWeight, textInset: textInset)
+                       fontWeight: fontWeight, lineHeight: lineHeight,
+                       centerVertically: centerTextVertically, textInset: textInset)
             if let sourceRect, let source, !source.isEmpty {
-                drawString(source, color: safeText.withAlphaComponent(0.8),
-                           in: sourceRect, ctx: ctx, maxFont: max(9, sourceRect.height * 0.62))
+                drawSourceString(source, color: safeText.withAlphaComponent(0.72),
+                                 in: sourceRect, ctx: ctx,
+                                 maxFont: max(1, min(maxFont ?? 10, sourceRect.height * 0.42)))
             }
         }
+    }
+
+    private static func drawSourceString(_ text: String, color: NSColor, in rect: CGRect,
+                                         ctx: CGContext, maxFont: CGFloat) {
+        let drawRect = rect.insetBy(dx: min(2, rect.width * 0.04),
+                                    dy: min(1, rect.height * 0.06))
+        guard drawRect.width > 1, drawRect.height > 1 else { return }
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .left
+        paragraph.lineBreakMode = .byCharWrapping
+        var size = max(1, maxFont)
+        var attrs = attributes(fontSize: size, weight: 400, color: color,
+                               paragraph: paragraph)
+        while size > 1 {
+            let measured = (text as NSString).boundingRect(
+                with: CGSize(width: drawRect.width, height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attrs)
+            if measured.height <= drawRect.height + 0.5 { break }
+            size = max(1, size - 0.5)
+            attrs = attributes(fontSize: size, weight: 400, color: color,
+                               paragraph: paragraph)
+        }
+        let value = NSAttributedString(string: text, attributes: attrs)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: true)
+        value.draw(with: drawRect, options: [.usesLineFragmentOrigin, .usesFontLeading])
+        NSGraphicsContext.restoreGraphicsState()
     }
 
     private static func drawString(_ s: String, color: NSColor, in rect: CGRect,
                                    ctx: CGContext, maxFont: CGFloat? = nil,
                                    fontWeight: Int = 400,
+                                   lineHeight: CGFloat = 0,
+                                   centerVertically: Bool = true,
                                    textInset: CGSize = CGSize(width: 3, height: 2)) {
         var drawRect = rect.insetBy(dx: min(textInset.width, rect.width * 0.08),
                                     dy: min(textInset.height, rect.height * 0.10))
+        _ = lineHeight
         guard drawRect.width > 1, drawRect.height > 1 else { return }
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = .left
         paragraph.lineBreakMode = .byCharWrapping
         paragraph.lineSpacing = 0
-        let upper = max(8, min(maxFont ?? 36, drawRect.height * 0.82))
-        var size = upper
-        var attrs: [NSAttributedString.Key: Any] = [:]
-        while size > 8 {
-            attrs = attributes(fontSize: size, weight: fontWeight,
+        var size = max(1, min(maxFont ?? 36, drawRect.height))
+        var attrs = attributes(fontSize: size, weight: fontWeight,
                                color: color, paragraph: paragraph)
+        while size > 1 {
             let measured = (s as NSString).boundingRect(
                 with: CGSize(width: drawRect.width, height: .greatestFiniteMagnitude),
                 options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attrs)
             if measured.height <= drawRect.height + 0.5 { break }
-            size -= 0.5
-        }
-        if attrs.isEmpty {
-            attrs = attributes(fontSize: 8, weight: fontWeight,
+            size = max(1, size - 0.5)
+            attrs = attributes(fontSize: size, weight: fontWeight,
                                color: color, paragraph: paragraph)
         }
         let ns = NSAttributedString(string: s, attributes: attrs)
         let measured = (s as NSString).boundingRect(
             with: CGSize(width: drawRect.width, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attrs)
-        if measured.height < drawRect.height {
+        if centerVertically, measured.height < drawRect.height {
             drawRect.origin.y += (drawRect.height - measured.height) / 2
             drawRect.size.height = measured.height
         }
@@ -149,7 +192,7 @@ enum MacPresent {
     private static func attributes(fontSize: CGFloat, weight: Int, color: NSColor,
                                    paragraph: NSParagraphStyle) -> [NSAttributedString.Key: Any] {
         let nativeWeight: NSFont.Weight = weight >= 600 ? .semibold : .regular
-        let font = NSFont.systemFont(ofSize: max(8, fontSize), weight: nativeWeight)
+        let font = NSFont.systemFont(ofSize: max(1, fontSize), weight: nativeWeight)
         let attrs: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: color,

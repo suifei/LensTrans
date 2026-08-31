@@ -21,10 +21,15 @@ final class OverlayWatchSession {
     private var capture = OverlayCapture()
     private var timer: Timer?
     private var lastLayoutKey = ""
+    private var incompleteLayoutKey = ""
+    private var incompleteRetryAt = Date.distantPast
+    private var incompleteAttempts = 0
     private var emptySince: Date?
     private var running = false
     private var tickBusy = false
     private var startupTask: Task<Void, Never>?
+    private var startedAt = Date.distantPast
+    private var firstPresentLogged = false
 
     init(panel: OverlayPanel) {
         self.panel = panel
@@ -35,6 +40,11 @@ final class OverlayWatchSession {
         running = true
         emptySince = nil
         lastLayoutKey = ""
+        incompleteLayoutKey = ""
+        incompleteRetryAt = .distantPast
+        incompleteAttempts = 0
+        startedAt = Date()
+        firstPresentLogged = false
         timer?.invalidate()
         startupTask?.cancel()
         // Start capture first, then process the first frame immediately. This avoids the
@@ -148,19 +158,67 @@ final class OverlayWatchSession {
             let contrast = contrastOverride.map { $0 != 0 }
                 ?? (store.contrast || TrayController.shared.contrastMode)
             let target = store.tgtLang.isEmpty ? TrayController.shared.targetLang : store.tgtLang
-            let layoutKey = visibleBlocks.map {
-                "\($0.text.lowercased())@\(Int($0.x)),\(Int($0.y)),\(Int($0.w)),\(Int($0.h))"
+            let keyBlocks = visibleBlocks.filter {
+                MacCoreBridge.sourceNeedsTranslation($0.text, targetLanguage: target)
+            }
+            let layoutKey = keyBlocks.map {
+                "\($0.text.lowercased())@\(Int($0.x / 4)),\(Int($0.y / 4))," +
+                    "\(Int($0.w / 4)),\(Int($0.h / 4))"
             }.joined(separator: "|") +
                 "|cfg:\(target)|\(store.quality)|\(store.render)|\(contrast)|\(store.fontScale)"
             if layoutKey == lastLayoutKey, panel.mode == .translating { return }
+            let now = Date()
+            if layoutKey == incompleteLayoutKey, now < incompleteRetryAt { return }
+            let retryingIncomplete = layoutKey == incompleteLayoutKey
+            let effectiveQuality = store.quality || retryingIncomplete
+            let requestedPanelFrame = panel.frame
 
             // Keep the UI actor free while OCR results are translated. The worker creates one
             // engine per tick so model access remains serialized inside that task.
             let workBlocks = visibleBlocks
-            guard let batchSource = MacCoreBridge.batchSource(blocks: workBlocks) else { return }
+            let translationIndices = workBlocks.indices.filter {
+                MacCoreBridge.sourceNeedsTranslation(
+                    workBlocks[$0].text, targetLanguage: target)
+            }
+            guard !translationIndices.isEmpty else { return }
+            var cachedTranslations = Array(repeating: "", count: workBlocks.count)
+            for index in translationIndices {
+                let source = workBlocks[index].text.trimmingCharacters(in: .whitespacesAndNewlines)
+                let key = "\(target)|\(source.lowercased())|\(store.quality)"
+                cachedTranslations[index] = TranslationCacheStore.shared.get(key) ?? ""
+            }
+            let cachedCount = translationIndices.filter {
+                MacCoreBridge.translationUsable(
+                    source: workBlocks[$0].text,
+                    translation: cachedTranslations[$0], targetLanguage: target)
+            }.count
+            if cachedCount > 0 && !firstPresentLogged {
+                RuntimeLog.info("translate.cache_preview blocks=\(cachedCount)")
+                commitPresentation(
+                    workBlocks: workBlocks, translations: cachedTranslations,
+                    frameSize: CGSize(width: frame.width, height: frame.height),
+                    panel: panel, contrast: contrast, store: store, target: target,
+                    layoutKey: layoutKey, complete: cachedCount == translationIndices.count)
+            }
+            if translationIndices.allSatisfy({
+                MacCoreBridge.translationUsable(
+                    source: workBlocks[$0].text,
+                    translation: cachedTranslations[$0], targetLanguage: target)
+            }) {
+                RuntimeLog.info("translate.cache_fast blocks=\(translationIndices.count)")
+                return
+            }
+            let requestIndices = translationIndices.filter {
+                !MacCoreBridge.translationUsable(
+                    source: workBlocks[$0].text,
+                    translation: cachedTranslations[$0], targetLanguage: target)
+            }
+            let translationBlocks = requestIndices.map { workBlocks[$0] }
+            guard let batchSource = MacCoreBridge.batchSource(blocks: translationBlocks) else { return }
             let requests = [MacTranslateRequest(
                 text: batchSource, srcLang: "auto", tgtLang: target,
-                quality: store.quality, batchProtocol: true)]
+                quality: effectiveQuality, batchProtocol: true)]
+            let translationStarted = Date()
             let translated = await Self.translateInBackground(
                 requests: requests, kind: kind, modelPath: modelPath,
                 cliPath: MacPaths.findLlamaCli(), cloudBaseURL: store.cloudBaseURL,
@@ -173,82 +231,119 @@ final class OverlayWatchSession {
             // The user may have released the temporary hotkey while the model was running.
             // Never paint a stale result after the session has been stopped or edited.
             guard running, panel.mode == .watching || panel.mode == .translating else { return }
+            guard panel.frame.equalTo(requestedPanelFrame) else { return }
+            let currentContrast = contrastOverride.map { $0 != 0 }
+                ?? (store.contrast || TrayController.shared.contrastMode)
+            guard currentContrast == contrast else { return }
             guard let batchResult = translated.first else { return }
-            var batchTranslations = MacCoreBridge.parseBatch(
-                output: batchResult.text, count: workBlocks.count)
-            var batchUsable = MacCoreBridge.batchOutputUsable(
-                blocks: workBlocks, output: batchResult.text)
-            if !batchUsable && workBlocks.count > MacCoreBridge.batchFallbackGroupSize {
+            let parsedBatch = MacCoreBridge.parseBatch(
+                output: batchResult.text, count: translationBlocks.count)
+            var batchTranslations = cachedTranslations
+            for (offset, text) in parsedBatch.enumerated() where offset < requestIndices.count {
+                batchTranslations[requestIndices[offset]] = text
+            }
+            var repairIndices = translationIndices.filter {
+                !MacCoreBridge.translationUsable(
+                    source: workBlocks[$0].text,
+                    translation: batchTranslations[$0], targetLanguage: target)
+            }
+            var repairLatencyMs = 0
+            var repairBatchCount = 0
+            if !repairIndices.isEmpty {
                 let size = MacCoreBridge.batchFallbackGroupSize
-                var fallbackRequests: [MacTranslateRequest] = []
-                var ranges: [Range<Int>] = []
-                for begin in stride(from: 0, to: workBlocks.count, by: size) {
-                    let range = begin..<min(workBlocks.count, begin + size)
+                var repairRequests: [MacTranslateRequest] = []
+                var repairGroups: [[Int]] = []
+                for begin in stride(from: 0, to: repairIndices.count, by: size) {
+                    let indices = Array(repairIndices[begin..<min(repairIndices.count, begin + size)])
+                    let group = indices.map { workBlocks[$0] }
                     guard let source = MacCoreBridge.batchSource(
-                        blocks: Array(workBlocks[range])) else { continue }
-                    ranges.append(range)
-                    fallbackRequests.append(MacTranslateRequest(
+                        blocks: group) else { continue }
+                    repairGroups.append(indices)
+                    repairRequests.append(MacTranslateRequest(
                         text: source, srcLang: "auto", tgtLang: target,
-                        quality: store.quality, batchProtocol: true))
+                        quality: effectiveQuality, batchProtocol: true))
                 }
-                let fallbackResults = await Self.translateInBackground(
-                    requests: fallbackRequests, kind: kind, modelPath: modelPath,
+                let repairResults = await Self.translateInBackground(
+                    requests: repairRequests, kind: kind, modelPath: modelPath,
                     cliPath: MacPaths.findLlamaCli(), cloudBaseURL: store.cloudBaseURL,
                     cloudKey: cloudKey, cloudModel: store.cloudModel)
-                batchTranslations = Array(repeating: "", count: workBlocks.count)
-                var usableGroups = 0
-                for (groupIndex, range) in ranges.enumerated() where groupIndex < fallbackResults.count {
-                    let groupBlocks = Array(workBlocks[range])
-                    let result = fallbackResults[groupIndex]
-                    RuntimeLog.info("batch.fallback_result[\(groupIndex)]=\(result.text)")
-                    if MacCoreBridge.batchOutputUsable(blocks: groupBlocks, output: result.text) {
-                        usableGroups += 1
-                    }
-                    let parsed = MacCoreBridge.parseBatch(output: result.text, count: groupBlocks.count)
-                    for (offset, text) in parsed.enumerated() {
-                        batchTranslations[range.lowerBound + offset] = text
+                repairLatencyMs = repairResults.reduce(0) { $0 + $1.latencyMs }
+                repairBatchCount = repairResults.count
+                for (groupIndex, indices) in repairGroups.enumerated()
+                    where groupIndex < repairResults.count {
+                    let result = repairResults[groupIndex]
+                    RuntimeLog.info("batch.repair_result[\(groupIndex)]=\(result.text)")
+                    let parsed = MacCoreBridge.parseBatch(output: result.text, count: indices.count)
+                    for (offset, text) in parsed.enumerated() where offset < indices.count {
+                        let original = indices[offset]
+                        if MacCoreBridge.translationUsable(
+                            source: workBlocks[original].text,
+                            translation: text, targetLanguage: target) {
+                            batchTranslations[original] = text
+                        }
                     }
                 }
-                batchUsable = MacCoreBridge.batchFallbackUsable(
-                    totalGroups: ranges.count, usableGroups: usableGroups)
-                RuntimeLog.info("batch.fallback_groups=\(ranges.count) usable=\(usableGroups)")
-            }
-            RuntimeLog.info("batch.usable=\(batchUsable) blocks=\(workBlocks.count)")
-            guard batchUsable else { return }
-            var plans: [MacPresentBlock] = []
-            for (index, block) in workBlocks.enumerated() {
-                let source = block.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                let cacheKey = "\(target)|\(source.lowercased())|\(store.quality)"
-                let text = TranslationCacheStore.shared.get(cacheKey) ?? batchTranslations[index]
-                guard !text.isEmpty else { continue }
-                if TranslationCacheStore.shared.get(cacheKey) == nil {
-                    TranslationCacheStore.shared.put(cacheKey, text)
+                repairIndices = translationIndices.filter {
+                    !MacCoreBridge.translationUsable(
+                        source: workBlocks[$0].text,
+                        translation: batchTranslations[$0], targetLanguage: target)
                 }
-                guard let layout = MacCoreBridge.layout(
-                    block: block, translation: text,
-                    frameSize: CGSize(width: frame.width, height: frame.height),
-                    targetSize: panel.frame.size, contrast: contrast,
-                    render: store.render, stickerAlpha: store.stickerAlpha,
-                    fontScale: store.fontScale) else { continue }
-                plans.append(MacPresentBlock(
-                    rect: layout.rect, mode: layout.mode, text: text,
-                    source: layout.showSource ? source : nil,
-                    fill: NSColor(calibratedRed: layout.fillColor.red,
-                                  green: layout.fillColor.green,
-                                  blue: layout.fillColor.blue, alpha: 1),
-                    textColor: NSColor(calibratedRed: layout.textColor.red,
-                                       green: layout.textColor.green,
-                                       blue: layout.textColor.blue, alpha: 1),
-                    stickerAlpha: CGFloat(store.stickerAlpha) / 100,
-                    fontSize: layout.fontSize, fontWeight: layout.fontWeight,
-                    textInset: layout.textInset, cornerRadius: layout.cornerRadius
-                ))
-                panel.applyPresent(blocks: plans)
-                RuntimeLog.info("present.blocks=\(plans.count) rect=\(layout.rect) mode=\(layout.mode)")
             }
-            guard !plans.isEmpty else { return }
-            lastLayoutKey = layoutKey
-            RuntimeLog.info("present.committed blocks=\(plans.count)")
+            if !repairIndices.isEmpty, MacCoreBridge.isHunyuanModel(path: modelPath),
+               let fallbackPath = MacPaths.resolveFallbackModelPath(primary: modelPath) {
+                let fallbackBlocks = repairIndices.map { workBlocks[$0] }
+                if let fallbackSource = MacCoreBridge.batchSource(blocks: fallbackBlocks) {
+                    let fallbackResults = await Self.translateInBackground(
+                        requests: [MacTranslateRequest(
+                            text: fallbackSource, srcLang: "auto", tgtLang: target,
+                            quality: true, batchProtocol: true)],
+                        kind: .local, modelPath: fallbackPath,
+                        cliPath: MacPaths.findLlamaCli(), cloudBaseURL: store.cloudBaseURL,
+                        cloudKey: cloudKey, cloudModel: store.cloudModel)
+                    repairLatencyMs += fallbackResults.reduce(0) { $0 + $1.latencyMs }
+                    repairBatchCount += fallbackResults.count
+                    if let fallbackResult = fallbackResults.first {
+                        RuntimeLog.info("batch.llm_fallback=\(fallbackResult.text)")
+                        let parsed = MacCoreBridge.parseBatch(
+                            output: fallbackResult.text, count: repairIndices.count)
+                        for (offset, text) in parsed.enumerated() where offset < repairIndices.count {
+                            let original = repairIndices[offset]
+                            if MacCoreBridge.translationUsable(
+                                source: workBlocks[original].text,
+                                translation: text, targetLanguage: target) {
+                                batchTranslations[original] = text
+                            }
+                        }
+                    }
+                    repairIndices = translationIndices.filter {
+                        !MacCoreBridge.translationUsable(
+                            source: workBlocks[$0].text,
+                            translation: batchTranslations[$0], targetLanguage: target)
+                    }
+                }
+            }
+            RuntimeLog.info(
+                "translate.metrics initialMs=\(translated.first?.latencyMs ?? 0) " +
+                "repairMs=\(repairLatencyMs) repairBatches=\(repairBatchCount) " +
+                "wallMs=\(Int(Date().timeIntervalSince(translationStarted) * 1000))")
+            guard running, panel.mode == .watching || panel.mode == .translating,
+                  panel.frame.equalTo(requestedPanelFrame) else { return }
+            let finalContrast = contrastOverride.map { $0 != 0 }
+                ?? (store.contrast || TrayController.shared.contrastMode)
+            guard finalContrast == contrast else { return }
+            let usableCount = workBlocks.indices.filter {
+                MacCoreBridge.translationUsable(
+                    source: workBlocks[$0].text,
+                    translation: batchTranslations[$0], targetLanguage: target)
+            }.count
+            RuntimeLog.info(
+                "batch.usable=\(usableCount)/\(workBlocks.count) repaired=\(repairIndices.isEmpty)")
+            guard usableCount > 0 else { return }
+            commitPresentation(
+                workBlocks: workBlocks, translations: batchTranslations,
+                frameSize: CGSize(width: frame.width, height: frame.height),
+                panel: panel, contrast: contrast, store: store, target: target,
+                layoutKey: layoutKey, complete: repairIndices.isEmpty)
         } catch {
             // Permission / no-frame: keep watching; do not crash the app.
             capture.lastError = error.localizedDescription
@@ -256,22 +351,96 @@ final class OverlayWatchSession {
         }
     }
 
+    private func commitPresentation(
+        workBlocks: [MacOcrBlock], translations: [String], frameSize: CGSize,
+        panel: OverlayPanel, contrast: Bool, store: SettingsStore,
+        target: String, layoutKey: String, complete: Bool
+    ) {
+        var presentBlocks: [MacOcrBlock] = []
+        var presentTranslations: [String] = []
+        for (index, block) in workBlocks.enumerated() where index < translations.count {
+            let source = block.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let cacheKey = "\(target)|\(source.lowercased())|\(store.quality)"
+            let text = TranslationCacheStore.shared.get(cacheKey) ?? translations[index]
+            guard MacCoreBridge.translationUsable(
+                source: source, translation: text, targetLanguage: target) else { continue }
+            if TranslationCacheStore.shared.get(cacheKey) == nil {
+                TranslationCacheStore.shared.put(cacheKey, text)
+            }
+            presentBlocks.append(block)
+            presentTranslations.append(text)
+        }
+        let layouts = MacCoreBridge.layouts(
+            blocks: presentBlocks, translations: presentTranslations,
+            frameSize: frameSize, targetSize: panel.frame.size, contrast: contrast,
+            render: store.render, stickerAlpha: store.stickerAlpha,
+            fontScale: store.fontScale,
+            targetPixelsPerUnit: panel.backingScaleFactor)
+        let plans = layouts.map { layout in
+            MacPresentBlock(
+                rect: layout.rect, mode: layout.mode, text: layout.text,
+                source: layout.showSource ? layout.sourceText : nil,
+                fill: NSColor(calibratedRed: layout.fillColor.red,
+                              green: layout.fillColor.green,
+                              blue: layout.fillColor.blue, alpha: 1),
+                textColor: NSColor(calibratedRed: layout.textColor.red,
+                                   green: layout.textColor.green,
+                                   blue: layout.textColor.blue, alpha: 1),
+                stickerAlpha: CGFloat(store.stickerAlpha) / 100,
+                fontSize: layout.fontSize, fontWeight: layout.fontWeight,
+                lineHeight: layout.lineHeight,
+                centerTextVertically: layout.centerTextVertically,
+                coverRects: layout.coverRects,
+                textInset: layout.textInset, cornerRadius: layout.cornerRadius)
+        }
+        guard !plans.isEmpty else { return }
+        panel.applyPresent(blocks: plans)
+        if !firstPresentLogged {
+            firstPresentLogged = true
+            RuntimeLog.info("present.first_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000))")
+        }
+        if complete {
+            lastLayoutKey = layoutKey
+            incompleteLayoutKey = ""
+            incompleteAttempts = 0
+        } else {
+            lastLayoutKey = ""
+            if incompleteLayoutKey == layoutKey {
+                incompleteAttempts += 1
+            } else {
+                incompleteLayoutKey = layoutKey
+                incompleteAttempts = 1
+            }
+            incompleteRetryAt = Date().addingTimeInterval(incompleteAttempts < 3 ? 3 : 30)
+        }
+        for layout in layouts {
+            RuntimeLog.info(
+                "present.rect=\(layout.rect) mode=\(layout.mode) " +
+                "ocrLinePx=\(layout.sourceLineHeight) fontPt=\(layout.fontSize) " +
+                "backingScale=\(panel.backingScaleFactor) fontPhysicalPx=" +
+                "\(layout.fontSize * panel.backingScaleFactor)")
+        }
+        RuntimeLog.info("present.committed blocks=\(plans.count)")
+    }
+
     private static func translateInBackground(
         requests: [MacTranslateRequest], kind: MacEngineRouter.Kind, modelPath: String,
         cliPath: String?, cloudBaseURL: String, cloudKey: String, cloudModel: String
     ) async -> [MacTranslateResult] {
-        await Task.detached(priority: .userInitiated) {
-            let local = MacLocalEngine(modelPath: modelPath, cliPath: cliPath)
+        if kind == .local {
+            return await MacLocalEnginePool.shared.translate(
+                requests, modelPath: modelPath, cliPath: cliPath)
+        }
+        return await Task.detached(priority: .userInitiated) {
             let cloud = MacCloudEngine(baseURL: cloudBaseURL, apiKey: cloudKey, model: cloudModel)
             let results = requests.map { request -> MacTranslateResult in
                 switch kind {
-                case .local: return local.translate(request)
+                case .local: return MacTranslateResult(text: "", error: "invalid local dispatch")
                 case .cloud: return cloud.translate(request)
                 case .none:
                     return MacTranslateResult(text: "", error: "no engine ready")
                 }
             }
-            local.maybeIdleUnload(idleMs: ModelMetaLogic.idleUnloadMs)
             return results
         }.value
     }
@@ -310,41 +479,71 @@ final class OverlayWatchSession {
 
 @MainActor
 enum MacPaths {
-    /// Prefer bundled `.app` Resources/models, then settings override, App Support, repo models/.
+    static func discoverModels() -> [String] {
+        var seen = Set<String>()
+        var paths: [String] = []
+        for directory in modelDirectories() {
+            let files = (try? FileManager.default.contentsOfDirectory(
+                at: directory, includingPropertiesForKeys: [.fileSizeKey],
+                options: [.skipsHiddenFiles])) ?? []
+            for file in files where file.pathExtension.lowercased() == "gguf" {
+                let path = file.standardizedFileURL.path
+                if seen.insert(path).inserted { paths.append(path) }
+            }
+        }
+        return paths.sorted { ($0 as NSString).lastPathComponent.localizedStandardCompare(
+            ($1 as NSString).lastPathComponent) == .orderedAscending }
+    }
+
+    static func modelDirectories() -> [URL] {
+        var directories = [SettingsStore.shared.modelsDir]
+        if let resources = Bundle.main.resourceURL {
+            directories.append(resources.appendingPathComponent("models", isDirectory: true))
+        }
+        if let executable = Bundle.main.executableURL?.deletingLastPathComponent() {
+            directories.append(executable.deletingLastPathComponent()
+                .appendingPathComponent("Resources/models", isDirectory: true))
+        }
+        directories.append(URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent("models", isDirectory: true))
+        directories.append(URL(fileURLWithPath: repoRootCandidate())
+            .appendingPathComponent("models", isDirectory: true))
+        var seen = Set<String>()
+        return directories.filter { seen.insert($0.standardizedFileURL.path).inserted }
+    }
+
+    /// Explicit selection and active-model.txt win; otherwise use the bundled default
+    /// or the first installed ChatML-compatible GGUF plugin.
     static func resolveModelPath() -> String {
         let store = SettingsStore.shared
         let name = ModelMetaLogic.fileName
-
-        // 1) App-bundled GGUF (default offline pack) — highest priority for local inference.
-        var bundled: [String] = []
-        if let res = Bundle.main.resourcePath {
-            bundled.append(res + "/models/" + name)
-        }
-        if let exe = Bundle.main.executableURL?.deletingLastPathComponent() {
-            bundled.append(
-                exe.deletingLastPathComponent().appendingPathComponent("Resources/models/\(name)").path)
-        }
-        for p in bundled where FileManager.default.fileExists(atPath: p) {
-            return p
-        }
-
-        // 2) Explicit user/settings path.
         if !store.modelPath.isEmpty, FileManager.default.fileExists(atPath: store.modelPath) {
             return store.modelPath
         }
-
-        // 3) Application Support / cwd / repo checkout (dev).
-        let cands: [String] = [
-            store.modelsDir.appendingPathComponent(name).path,
-            FileManager.default.currentDirectoryPath + "/models/" + name,
-            repoRootCandidate() + "/models/" + name,
-            NSHomeDirectory() + "/works/LensTrans/lenstrans/models/" + name,
-            NSHomeDirectory() + "/works/LensTrans/models/" + name,
-        ]
-        for p in cands where FileManager.default.fileExists(atPath: p) {
-            return p
+        if let environment = ProcessInfo.processInfo.environment["LENSTRANS_MODEL_PATH"],
+           FileManager.default.fileExists(atPath: environment) {
+            return environment
         }
+        for directory in modelDirectories() {
+            let marker = directory.appendingPathComponent("active-model.txt")
+            guard let selected = try? String(contentsOf: marker, encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines), !selected.isEmpty else { continue }
+            let candidate = selected.hasPrefix("/")
+                ? selected : directory.appendingPathComponent(selected).path
+            if FileManager.default.fileExists(atPath: candidate) { return candidate }
+        }
+        for directory in modelDirectories() {
+            let candidate = directory.appendingPathComponent(name).path
+            if FileManager.default.fileExists(atPath: candidate) { return candidate }
+        }
+        if let installed = discoverModels().first { return installed }
         return store.modelsDir.appendingPathComponent(name).path
+    }
+
+    static func resolveFallbackModelPath(primary: String) -> String? {
+        discoverModels().first {
+            $0 != primary && ($0 as NSString).lastPathComponent == ModelMetaLogic.fileName
+        }
     }
 
     nonisolated static func findLlamaCli() -> String? {
