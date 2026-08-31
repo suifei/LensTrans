@@ -39,12 +39,15 @@ struct LensTransMacApp {
         HotkeyCenter.shared.onPause = { OverlayBoxStore.shared.pauseAll() }
         HotkeyCenter.shared.onHideAll = { OverlayBoxStore.shared.toggleAllVisible() }
         HotkeyCenter.shared.onSettings = { SettingsWindow.present() }
+        HotkeyCenter.shared.onTranslationStart = { OverlayBoxStore.shared.startTranslation() }
+        HotkeyCenter.shared.onTranslationStop = { OverlayBoxStore.shared.stopTranslation() }
         HotkeyCenter.shared.installDefaults()
 
         TrayController.shared.onNewBox = { _ = OverlayBoxStore.shared.createBox() }
         TrayController.shared.onToggleBoxes = { OverlayBoxStore.shared.toggleAllVisible() }
         TrayController.shared.onPause = { OverlayBoxStore.shared.pauseAll() }
 
+        let startWatching = argv.contains("--start-watching")
         if FirstRun.needsOnboarding && !noOnboard {
             OnboardingWindow.present()
         } else {
@@ -54,6 +57,11 @@ struct LensTransMacApp {
                 SettingsStore.shared.save()
             }
             _ = OverlayBoxStore.shared.createBox()
+            if startWatching {
+                for panel in OverlayBoxStore.shared.panels {
+                    panel.enterWatching()
+                }
+            }
         }
         app.run()
     }

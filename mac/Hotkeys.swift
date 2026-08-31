@@ -22,6 +22,19 @@ final class HotkeyCenter {
     var onPause: (() -> Void)?
     var onHideAll: (() -> Void)?
     var onSettings: (() -> Void)?
+    var onTranslationStart: (() -> Void)?
+    var onTranslationStop: (() -> Void)?
+
+    private let gestureKeyCode = UInt16(kVK_Space)
+    private let gestureModifiers: NSEvent.ModifierFlags = [.command, .shift]
+    private let doubleTapWindow: TimeInterval = 0.5
+    private var globalGestureMonitor: Any?
+    private var localGestureMonitor: Any?
+    private var gestureStopTask: Task<Void, Never>?
+    private var gestureKeyDown = false
+    private var gestureLocked = false
+    private var lockedTapPending = false
+    private var lastGestureUp = Date.distantPast
 
     func installDefaults() {
         combos = [
@@ -37,6 +50,7 @@ final class HotkeyCenter {
                   handler: { [weak self] in self?.onSettings?() }),
         ]
         registerAll()
+        installGestureMonitors()
     }
 
     func registerAll() {
@@ -66,6 +80,16 @@ final class HotkeyCenter {
     }
 
     func unregisterAll() {
+        gestureStopTask?.cancel()
+        gestureStopTask = nil
+        if let monitor = globalGestureMonitor {
+            NSEvent.removeMonitor(monitor)
+            globalGestureMonitor = nil
+        }
+        if let monitor = localGestureMonitor {
+            NSEvent.removeMonitor(monitor)
+            localGestureMonitor = nil
+        }
         for ref in hotKeyRefs {
             if let ref { UnregisterEventHotKey(ref) }
         }
@@ -73,6 +97,68 @@ final class HotkeyCenter {
         if let eventHandler {
             RemoveEventHandler(eventHandler)
             self.eventHandler = nil
+        }
+    }
+
+    private func installGestureMonitors() {
+        let mask: NSEvent.EventTypeMask = [.keyDown, .keyUp]
+        globalGestureMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) {
+            [weak self] event in
+            Task { @MainActor in self?.handleGesture(event) }
+        }
+        localGestureMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) {
+            [weak self] event in
+            Task { @MainActor in self?.handleGesture(event) }
+            return event
+        }
+    }
+
+    private func handleGesture(_ event: NSEvent) {
+        guard event.keyCode == gestureKeyCode else { return }
+        switch event.type {
+        case .keyDown:
+            guard !event.isARepeat, !gestureKeyDown,
+                  event.modifierFlags.intersection([.command, .shift]) == gestureModifiers else {
+                return
+            }
+            gestureKeyDown = true
+            let now = Date()
+            if gestureLocked {
+                if lockedTapPending && now.timeIntervalSince(lastGestureUp) <= doubleTapWindow {
+                    gestureLocked = false
+                    lockedTapPending = false
+                    onTranslationStop?()
+                } else {
+                    lockedTapPending = true
+                    lastGestureUp = now
+                }
+            } else if now.timeIntervalSince(lastGestureUp) <= doubleTapWindow {
+                gestureStopTask?.cancel()
+                gestureLocked = true
+                lockedTapPending = false
+                lastGestureUp = .distantPast
+                onTranslationStart?()
+            } else {
+                onTranslationStart?()
+            }
+        case .keyUp:
+            guard gestureKeyDown else { return }
+            gestureKeyDown = false
+            if gestureLocked {
+                if lockedTapPending { lastGestureUp = Date() }
+                return
+            }
+            lastGestureUp = Date()
+            gestureStopTask?.cancel()
+            gestureStopTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 520_000_000)
+                guard let self, !Task.isCancelled, !self.gestureKeyDown,
+                      !self.gestureLocked else { return }
+                self.lastGestureUp = .distantPast
+                self.onTranslationStop?()
+            }
+        default:
+            break
         }
     }
 

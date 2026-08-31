@@ -36,8 +36,10 @@ final class OverlayPanel: NSPanel {
         hasShadow = false
         ignoresMouseEvents = false
         hidesOnDeactivate = false
-        // Exclude this overlay from ScreenCaptureKit / screenshots (parity WDA_EXCLUDEFROMCAPTURE).
-        sharingType = .none
+        // Normal capture must exclude the overlay. Visual E2E can opt in so Computer Use
+        // can inspect the rendered panel; the capture filter still excludes this window.
+        sharingType = ProcessInfo.processInfo.environment["LENSTRANS_VISUAL_TEST"] == "1"
+            ? .readOnly : .none
 
         let chrome = OverlayChromeView(frame: NSRect(origin: .zero, size: contentRect.size))
         chrome.panel = self
@@ -226,6 +228,7 @@ final class OverlayChromeView: NSView {
     private static let borderColor = NSColor.systemBlue
 
     private var showChrome = true
+    private var editingChrome = true
     private var interactionEnabled = true
     private var activeHit: Hit = .none
     private var grabMouse = NSPoint.zero
@@ -249,33 +252,49 @@ final class OverlayChromeView: NSView {
     }
 
     func setEditingChrome(_ editing: Bool) {
-        showChrome = editing
+        // Keep a quiet outline in watching/translating mode so the box remains discoverable
+        // and movable after the blue editing chrome disappears.
+        showChrome = true
+        editingChrome = editing
         needsDisplay = true
     }
 
     override func draw(_ dirtyRect: NSRect) {
         if showChrome {
-            Self.editFill.setFill()
-            bounds.fill()
+            if editingChrome {
+                Self.editFill.setFill()
+                bounds.fill()
+                // Corner handle dots (visual only; hit area is larger).
+                let h = Self.handle
+                let dots: [NSPoint] = [
+                    NSPoint(x: 0, y: bounds.height - h),
+                    NSPoint(x: (bounds.width - h) / 2, y: bounds.height - h),
+                    NSPoint(x: bounds.width - h, y: bounds.height - h),
+                    NSPoint(x: 0, y: (bounds.height - h) / 2),
+                    NSPoint(x: bounds.width - h, y: (bounds.height - h) / 2),
+                    NSPoint(x: 0, y: 0),
+                    NSPoint(x: (bounds.width - h) / 2, y: 0),
+                    NSPoint(x: bounds.width - h, y: 0),
+                ]
+                NSColor.systemBlue.withAlphaComponent(0.85).setFill()
+                for p in dots {
+                    NSBezierPath(ovalIn: NSRect(x: p.x + 2, y: p.y + 2,
+                                                 width: h - 4, height: h - 4)).fill()
+                }
+            }
             let path = NSBezierPath(rect: bounds.insetBy(dx: 0.5, dy: 0.5))
-            path.lineWidth = 1.5
-            Self.borderColor.setStroke()
+            path.lineWidth = editingChrome ? 1.5 : 2
+            Self.borderColor.withAlphaComponent(editingChrome ? 1 : 0.9).setStroke()
             path.stroke()
-            // Corner handle dots (visual only; hit area is larger).
-            let h = Self.handle
-            let dots: [NSPoint] = [
-                NSPoint(x: 0, y: bounds.height - h),
-                NSPoint(x: (bounds.width - h) / 2, y: bounds.height - h),
-                NSPoint(x: bounds.width - h, y: bounds.height - h),
-                NSPoint(x: 0, y: (bounds.height - h) / 2),
-                NSPoint(x: bounds.width - h, y: (bounds.height - h) / 2),
-                NSPoint(x: 0, y: 0),
-                NSPoint(x: (bounds.width - h) / 2, y: 0),
-                NSPoint(x: bounds.width - h, y: 0),
-            ]
-            NSColor.systemBlue.withAlphaComponent(0.85).setFill()
-            for p in dots {
-                NSBezierPath(ovalIn: NSRect(x: p.x + 2, y: p.y + 2, width: h - 4, height: h - 4)).fill()
+            if !editingChrome {
+                let dot = NSRect(x: 1, y: 1, width: 7, height: 7)
+                let dots = [
+                    dot, dot.offsetBy(dx: bounds.width - 9, dy: 0),
+                    dot.offsetBy(dx: 0, dy: bounds.height - 9),
+                    dot.offsetBy(dx: bounds.width - 9, dy: bounds.height - 9),
+                ]
+                Self.borderColor.withAlphaComponent(0.9).setFill()
+                for p in dots { NSBezierPath(ovalIn: p).fill() }
             }
         }
         // Present layer draws above via CALayer; nothing else needed here.
@@ -383,9 +402,7 @@ final class OverlayChromeView: NSView {
 
     private func hit(at p: NSPoint) -> Hit {
         guard interactionEnabled else { return .none }
-        if !showChrome {
-            return bounds.contains(p) ? .move : .none
-        }
+        if !showChrome { return bounds.contains(p) ? .move : .none }
         let h = Self.handle
         let nearL = p.x < h
         let nearR = p.x >= bounds.width - h
@@ -412,11 +429,70 @@ final class OverlayBoxStore {
     private(set) var panels: [OverlayPanel] = []
 
     @discardableResult
-    func createBox(at rect: NSRect = NSRect(x: 200, y: 200, width: 480, height: 320)) -> OverlayPanel {
-        let p = OverlayPanel(contentRect: rect)
+    func createBox(at rect: NSRect? = nil) -> OverlayPanel {
+        let screen = Self.preferredScreen()
+        let fallback = screen?.visibleFrame ?? NSScreen.main?.visibleFrame
+            ?? NSScreen.screens.first?.visibleFrame
+            ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let initial = rect ?? Self.environmentRect() ?? NSRect(
+            x: fallback.minX + 80, y: fallback.maxY - 400,
+            width: 480, height: 320
+        )
+        let p = OverlayPanel(contentRect: initial)
         panels.append(p)
         p.showPanel()
         return p
+    }
+
+    /// Test automation can place the first box over a known desktop fixture without
+    /// changing the persisted user layout. Format: x,y,width,height in AppKit points.
+    private static func environmentRect() -> NSRect? {
+        guard let raw = ProcessInfo.processInfo.environment["LENSTRANS_START_RECT"] else {
+            return nil
+        }
+        let values = raw.split(separator: ",").compactMap { Double($0) }
+        guard values.count == 4, values[2] >= 80, values[3] >= 80 else { return nil }
+        return NSRect(x: values[0], y: values[1], width: values[2], height: values[3])
+    }
+
+    /// A global shortcut is normally pressed while another app is frontmost. Place the
+    /// new box on that app's display, including setups where the primary display is not
+    /// the display currently being translated.
+    private static func preferredScreen() -> NSScreen? {
+        if let requestedID = ProcessInfo.processInfo.environment["LENSTRANS_START_DISPLAY_ID"]
+            .flatMap(CGDirectDisplayID.init),
+           let requested = NSScreen.screens.first(where: {
+               ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID)
+                   == requestedID
+           }) {
+            return requested
+        }
+        guard let front = NSWorkspace.shared.frontmostApplication,
+              front.processIdentifier != ProcessInfo.processInfo.processIdentifier else {
+            return NSScreen.main
+        }
+        let windows = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
+        ) as? [[String: Any]] ?? []
+        let pid = front.processIdentifier
+        let bounds = windows.compactMap { info -> CGRect? in
+            guard let ownerPID = info[kCGWindowOwnerPID as String] as? Int32,
+                  ownerPID == pid,
+                  let layer = info[kCGWindowLayer as String] as? Int,
+                  layer == 0,
+                  let dictionary = info[kCGWindowBounds as String] as? NSDictionary,
+                  let rect = CGRect(dictionaryRepresentation: dictionary),
+                  rect.width > 40, rect.height > 40 else { return nil }
+            return rect
+        }
+        guard !bounds.isEmpty else { return NSScreen.main }
+        return NSScreen.screens.max { lhs, rhs in
+            let lhsArea = bounds.reduce(CGFloat.zero) { $0 + $1.intersection(lhs.frame).width
+                * $1.intersection(lhs.frame).height }
+            let rhsArea = bounds.reduce(CGFloat.zero) { $0 + $1.intersection(rhs.frame).width
+                * $1.intersection(rhs.frame).height }
+            return lhsArea < rhsArea
+        }
     }
 
     func toggleAllVisible() {
@@ -439,5 +515,23 @@ final class OverlayBoxStore {
                 p.enterPaused()
             }
         }
+    }
+
+    func startTranslation() {
+        for p in panels {
+            if p.mode == .hidden { p.showPanel() }
+            if p.mode == .editing || p.mode == .paused { p.enterWatching() }
+        }
+    }
+
+    func stopTranslation() {
+        for p in panels where p.mode == .watching || p.mode == .translating {
+            p.enterEditing()
+        }
+    }
+
+    func toggleTranslation() {
+        let active = panels.contains { $0.mode == .watching || $0.mode == .translating }
+        if active { stopTranslation() } else { startTranslation() }
     }
 }
