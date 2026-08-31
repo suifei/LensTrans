@@ -22,8 +22,17 @@ $Need = @(
   "ggml-cpu.dll"
 )
 
-if (-not (Test-Path (Join-Path $BuildDir "lenstrans_overlay.exe"))) {
-  throw "missing overlay in $BuildDir — build Release first"
+$overlayPath = Join-Path $BuildDir "lenstrans_overlay.exe"
+if (-not (Test-Path $overlayPath)) {
+  # Ninja writes single-config targets at the build root; some generators place
+  # the same target under a Release subdirectory. Normalize both layouts here.
+  $releaseDir = Join-Path $BuildDir "Release"
+  if (Test-Path (Join-Path $releaseDir "lenstrans_overlay.exe")) {
+    $BuildDir = $releaseDir
+    $overlayPath = Join-Path $BuildDir "lenstrans_overlay.exe"
+  } else {
+    throw "missing overlay in $BuildDir or $releaseDir; build Release first"
+  }
 }
 
 New-Item -ItemType Directory -Force -Path $BaseDir | Out-Null

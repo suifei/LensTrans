@@ -149,6 +149,17 @@ class CloudEngine final : public IEngine {
 
 #endif
 
+class UnconfiguredCloudEngine final : public IEngine {
+ public:
+  bool Ready() const override { return false; }
+  TranslateResult Translate(const TranslateRequest&) override {
+    TranslateResult r;
+    r.engine = EngineKind::Cloud;
+    r.error = "cloud not configured";
+    return r;
+  }
+};
+
 }  // namespace
 
 std::unique_ptr<IEngine> MakeCloudEngine(const std::string& base_url, const std::string& api_key,
@@ -159,7 +170,7 @@ std::unique_ptr<IEngine> MakeCloudEngine(const std::string& base_url, const std:
   (void)base_url;
   (void)api_key;
   (void)model;
-  return nullptr;
+  return std::make_unique<UnconfiguredCloudEngine>();
 #endif
 }
 

@@ -8,6 +8,7 @@
 #include <windows.h>
 
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -38,18 +39,21 @@ class RegionCapture {
   // WGC only — no BitBlt/PrintWindow. For permission probes.
   bool GrabWgcOnly(BgraFrame& out);
   void Stop();
-  const char* LastError() const { return err_.c_str(); }
+  std::string LastError() const;
 
  private:
   bool GrabWgc(BgraFrame& out);
   bool GrabPrintWindow(BgraFrame& out);
   bool GrabBitBlt(BgraFrame& out);
+  void StopLocked();
 
   struct Impl;
   Impl* impl_ = nullptr;
   HWND overlay_ = nullptr;
   RECT rect_{};
   std::string err_;
+  mutable std::mutex mu_;
+  bool wgc_failed_ = false;
 };
 
 }  // namespace lenstrans::win

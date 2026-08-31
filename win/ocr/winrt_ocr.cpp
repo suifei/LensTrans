@@ -146,6 +146,9 @@ void SampleColorAndVariance(const BgraFrame& frame, OcrBlock& block) {
   }
   if (n < 1) return;
   const double mr = sr / n, mg = sg / n, mb = sb / n;
+  block.background.r = static_cast<std::uint8_t>(std::clamp(mr, 0.0, 255.0));
+  block.background.g = static_cast<std::uint8_t>(std::clamp(mg, 0.0, 255.0));
+  block.background.b = static_cast<std::uint8_t>(std::clamp(mb, 0.0, 255.0));
   double vr = 0, vg = 0, vb = 0;
   auto var = [&](int x, int y) {
     if (x < 0 || y < 0 || x >= frame.w || y >= frame.h) return;

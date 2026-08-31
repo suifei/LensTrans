@@ -10,9 +10,13 @@
 #include "lenstrans/engine.hpp"
 #include "lenstrans/frame_diff.hpp"
 #include "lenstrans/geom.hpp"
+#include "lenstrans/model_meta.hpp"
+#include "lenstrans/paths.hpp"
 #include "lenstrans/pipeline.hpp"
 #include "lenstrans/present.hpp"
+#include "lenstrans/present_layout.hpp"
 #include "lenstrans/settings.hpp"
+#include "win/app/model_download.hpp"
 #include "win/app/secrets.hpp"
 #include "win/app/ui.hpp"
 #include "win/capture/capture.hpp"
@@ -94,6 +98,7 @@ struct OverlayBox {
   bool e2e_saw_present = false;
   bool e2e_saw_cover = false;
   std::string e2e_sample_src;
+  int fallback_ticks = 0;
 };
 
 struct App {
@@ -217,6 +222,8 @@ LPCWSTR CursorFor(Hit hit) {
     case Hit::NW:
     case Hit::SE:
       return IDC_SIZENWSE;
+    case Hit::Drag:
+      return IDC_SIZEALL;
     default:
       return IDC_ARROW;
   }
@@ -267,14 +274,34 @@ void CopyUtf8(const std::string& utf8) {
   }
 }
 
-int HitTransBlock(const std::vector<lenstrans::OcrBlock>& blocks, int x, int y) {
-  for (int i = static_cast<int>(blocks.size()) - 1; i >= 0; --i) {
-    const auto& b = blocks[static_cast<size_t>(i)];
-    const int x0 = static_cast<int>(b.bbox.x);
-    const int y0 = static_cast<int>(b.bbox.y);
-    const int x1 = x0 + std::max(8, static_cast<int>(b.bbox.w));
-    const int y1 = y0 + std::max(8, static_cast<int>(b.bbox.h));
-    if (x >= x0 && x < x1 && y >= y0 && y < y1) return i;
+struct PresentHit {
+  std::size_t source_index = 0;
+  lenstrans::PresentBlockLayout layout;
+};
+
+std::vector<PresentHit> BuildPresentHits(const std::vector<lenstrans::OcrBlock>& blocks,
+                                         const std::vector<std::string>& translations, int w, int h,
+                                         lenstrans::RenderLock render) {
+  std::vector<PresentHit> out;
+  const std::size_t count = std::min(blocks.size(), translations.size());
+  out.reserve(count);
+  for (std::size_t i = 0; i < count; ++i) {
+    std::vector<lenstrans::OcrBlock> one_blocks{blocks[i]};
+    std::vector<std::string> one_trans{translations[i]};
+    const auto layouts = lenstrans::BuildPresentLayout(
+        one_blocks, one_trans, w, h, w, h, g.settings.contrast, render,
+        g.settings.sticker_alpha, g.settings.font_scale);
+    for (const auto& layout : layouts) out.push_back({i, layout});
+  }
+  return out;
+}
+
+int HitPresentBlock(const std::vector<PresentHit>& hits, int x, int y) {
+  for (int i = static_cast<int>(hits.size()) - 1; i >= 0; --i) {
+    if (lenstrans::PointInOverlayBlock(static_cast<float>(x), static_cast<float>(y), hits[i].layout.rect.x,
+                                       hits[i].layout.rect.y, hits[i].layout.rect.w,
+                                       hits[i].layout.rect.h))
+      return static_cast<int>(i);
   }
   return -1;
 }
@@ -309,6 +336,10 @@ void TickHoverFade() {
     GetCursorPos(&cur);
     POINT local = cur;
     ScreenToClient(box->hwnd, &local);
+    RECT client{};
+    GetClientRect(box->hwnd, &client);
+    const int width = client.right - client.left;
+    const int height = client.bottom - client.top;
     std::vector<lenstrans::OcrBlock> blocks;
     std::vector<std::string> trans;
     {
@@ -316,7 +347,9 @@ void TickHoverFade() {
       blocks = box->fade_committed.empty() ? box->committed : box->fade_committed;
       trans = box->fade_trans.empty() ? box->translations : box->fade_trans;
     }
-    const int hit = HitTransBlock(blocks, local.x, local.y);
+    const auto hits = BuildPresentHits(blocks, trans, width, height, box->render);
+    const int hit_pos = HitPresentBlock(hits, local.x, local.y);
+    const int hit = hit_pos >= 0 ? static_cast<int>(hits[static_cast<size_t>(hit_pos)].source_index) : -1;
     if (hit == box->hover_i && hit >= 0)
       box->hover_ms = std::min(2000, box->hover_ms + 50);
     else {
@@ -343,6 +376,52 @@ void DrawUtf8(HDC hdc, int x, int y, int w, int h, const std::string& utf8, COLO
   SetTextColor(hdc, color);
   RECT rc{x, y, x + w, y + h};
   DrawTextW(hdc, ws.c_str(), n, &rc, DT_LEFT | DT_WORDBREAK | DT_NOPREFIX);
+}
+
+void DrawUtf8Fit(HDC hdc, int x, int y, int w, int h, const std::string& utf8, COLORREF color,
+                 int preferred_px) {
+  if (utf8.empty() || w <= 2 || h <= 2) return;
+  const int n = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()), nullptr, 0);
+  if (n <= 0) return;
+  std::wstring ws(static_cast<std::size_t>(n), 0);
+  MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()), ws.data(), n);
+  const int upper = std::max(8, std::min(48, preferred_px > 0 ? preferred_px : h * 3 / 4));
+  HFONT chosen = nullptr;
+  int chosen_px = 8;
+  for (int px = upper; px >= 8; --px) {
+    HFONT f = CreateFontW(-px, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                          OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                          DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    if (!f) continue;
+    HGDIOBJ old = SelectObject(hdc, f);
+    RECT measure{x, y, x + w, y + h};
+    DrawTextW(hdc, ws.c_str(), n, &measure,
+              DT_LEFT | DT_WORDBREAK | DT_NOPREFIX | DT_EDITCONTROL | DT_CALCRECT);
+    SelectObject(hdc, old);
+    if (measure.bottom - y <= h) {
+      chosen = f;
+      chosen_px = px;
+      break;
+    }
+    DeleteObject(f);
+  }
+  if (!chosen) {
+    chosen = CreateFontW(-chosen_px, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                         OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                         DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+  }
+  if (!chosen) return;
+  const int saved = SaveDC(hdc);
+  HGDIOBJ old = SelectObject(hdc, chosen);
+  SetBkMode(hdc, TRANSPARENT);
+  SetTextColor(hdc, color);
+  IntersectClipRect(hdc, x, y, x + w, y + h);
+  RECT rc{x, y, x + w, y + h};
+  DrawTextW(hdc, ws.c_str(), n, &rc,
+            DT_LEFT | DT_WORDBREAK | DT_NOPREFIX | DT_EDITCONTROL);
+  SelectObject(hdc, old);
+  if (saved) RestoreDC(hdc, saved);
+  DeleteObject(chosen);
 }
 
 void FixAlpha(uint32_t* px, int w, int h, int x0, int y0, int x1, int y1) {
@@ -414,6 +493,10 @@ void PaintBox(OverlayBox* box) {
   const bool has_text = editing || has_text_locked;
   const float fade = editing ? 1.f : lenstrans::FadeOverlayAlpha(has_text, empty_ms);
 
+  if (!editing) {
+    FillRectPx(px, w, 1, 1, w - 1, std::min(kDragBarH, h - 1), w, h, Premul(38, 0, 0, 0));
+  }
+
   if (editing && diff.cols > 0 && diff.rows > 0) {
     const float cw = static_cast<float>(w) / diff.cols;
     const float ch = static_cast<float>(h) / diff.rows;
@@ -427,40 +510,39 @@ void PaintBox(OverlayBox* box) {
     }
   }
 
-  const auto draw_block = [&](const lenstrans::OcrBlock& b, const std::string& text, bool is_trans) {
-    const int x = static_cast<int>(b.bbox.x);
-    const int y = static_cast<int>(b.bbox.y);
-    const int bw = std::max(8, static_cast<int>(b.bbox.w));
-    int bh = std::max(8, static_cast<int>(b.bbox.h * (g.settings.font_scale / 100.f)));
-    const auto mode =
-        lenstrans::DecidePresent(b.bg_variance, g.settings.contrast, box->render);
-    int fr = 240, fg = 240, fb = 240;
-    if (mode == lenstrans::PresentMode::Immersive) {
-      // sample fill from ring is approximated as inverted-safe solid
-      fr = 245;
-      fg = 245;
-      fb = 245;
-      BlendRect(px, w, x, y, x + bw, y + bh, w, h, 255, static_cast<uint8_t>(fr),
-                static_cast<uint8_t>(fg), static_cast<uint8_t>(fb));
-    } else {
-      const uint8_t a = static_cast<uint8_t>(g.settings.sticker_alpha * 255 / 100);
-      BlendRect(px, w, x, y, x + bw, y + bh + (mode == lenstrans::PresentMode::StickerContrast ? bh / 2 : 0),
-                w, h, a, 32, 32, 32);
-      if (mode == lenstrans::PresentMode::StickerContrast) bh = bh + bh / 2;
+  const auto draw_layout = [&](const lenstrans::PresentBlockLayout& p) {
+    const int x = static_cast<int>(std::floor(p.rect.x));
+    const int y = static_cast<int>(std::floor(p.rect.y));
+    const int bw = std::max(8, static_cast<int>(std::ceil(p.rect.w)));
+    const int bh = std::max(8, static_cast<int>(std::ceil(p.rect.h)));
+    const int br = p.source.background.r, bg = p.source.background.g, bb = p.source.background.b;
+    const bool contrast = p.mode == lenstrans::PresentMode::StickerContrast && p.show_source;
+    const int target_h = contrast ? std::max(8, bh * 2 / 3) : bh;
+    const uint8_t fill_alpha = static_cast<uint8_t>(std::round(
+        std::max(0.0f, std::min(1.0f, p.background_alpha)) * 255.0f));
+    BlendRect(px, w, x, y, x + bw, y + bh, w, h, fill_alpha,
+              static_cast<uint8_t>(br), static_cast<uint8_t>(bg), static_cast<uint8_t>(bb));
+    const auto text_color = lenstrans::AccessibleTextColor(p.source.background);
+    const int tr = text_color.r, tg = text_color.g, tb = text_color.b;
+    std::string joined;
+    for (size_t i = 0; i < p.lines.size(); ++i) {
+      if (i) joined += '\n';
+      joined += p.lines[i];
     }
-    int tr = b.color.r, tg = b.color.g, tb = b.color.b;
-    if (!lenstrans::ContrastOk(tr, tg, tb, fr, fg, fb)) lenstrans::InvertRgb(tr, tg, tb);
-    DrawUtf8(mem, x + 4, y + 2, bw - 8, bh - 4, text, RGB(tr, tg, tb));
-    if (mode == lenstrans::PresentMode::StickerContrast && is_trans) {
-      DrawUtf8(mem, x + 4, y + bh * 2 / 3, bw - 8, bh / 3, b.text, RGB(200, 200, 200));
+    DrawUtf8Fit(mem, x + 4, y + 2, bw - 8, target_h - 4, joined, RGB(tr, tg, tb),
+                static_cast<int>(std::round(p.font_px)));
+    if (contrast) {
+      DrawUtf8Fit(mem, x + 4, y + target_h, bw - 8, bh - target_h - 2, p.source.text,
+                  RGB(200, 200, 200), std::max(8, static_cast<int>(p.font_px * 0.55f)));
     }
     FixAlpha(px, w, h, x, y, x + bw, y + bh);
   };
 
   if (!editing) {
-    for (size_t i = 0; i < committed.size() && i < trans.size(); ++i) {
-      if (!trans[i].empty()) draw_block(committed[i], trans[i], true);
-    }
+    const auto layouts = lenstrans::BuildPresentLayout(
+        committed, trans, w, h, w, h, g.settings.contrast, box->render,
+        g.settings.sticker_alpha, g.settings.font_scale);
+    for (const auto& layout : layouts) draw_layout(layout);
   } else {
     for (const auto& b : ocr) {
       BlendRect(px, w, static_cast<int>(b.bbox.x), static_cast<int>(b.bbox.y),
@@ -504,17 +586,24 @@ void PaintBox(OverlayBox* box) {
   }
 
   if (!editing && fade > 0.f && lenstrans::HoverArmed(hover_ms) && hover_i >= 0 &&
-      hover_i < static_cast<int>(committed.size())) {
-    const auto& b = committed[static_cast<size_t>(hover_i)];
-    const int bx = static_cast<int>(b.bbox.x);
-    const int by = static_cast<int>(b.bbox.y);
-    const int bw = std::max(120, static_cast<int>(b.bbox.w));
-    const int bh = 40;
-    const int ty = std::max(0, by - bh - 6);
-    BlendRect(px, w, bx, ty, bx + bw, ty + bh, w, h, 220, 24, 24, 24);
-    DrawUtf8(mem, bx + 6, ty + 4, bw - 12, bh - 8, b.text, RGB(255, 255, 255));
-    DrawUtf8(mem, bx + 6, ty + 22, bw - 12, 14, "点击复制译文", RGB(180, 180, 180));
-    FixAlpha(px, w, h, bx, ty, bx + bw, ty + bh);
+      hover_i < static_cast<int>(committed.size()) && hover_i < static_cast<int>(trans.size())) {
+    const auto hits = BuildPresentHits(committed, trans, w, h, box->render);
+    const auto it = std::find_if(hits.begin(), hits.end(), [hover_i](const PresentHit& hit) {
+      return hit.source_index == static_cast<std::size_t>(hover_i);
+    });
+    if (it != hits.end()) {
+      const auto& rect = it->layout.rect;
+      const int bx = static_cast<int>(std::floor(rect.x));
+      const int by = static_cast<int>(std::floor(rect.y));
+      const int bw = std::max(120, static_cast<int>(std::ceil(rect.w)));
+      const int bh = 40;
+      const int ty = std::max(0, by - bh - 6);
+      BlendRect(px, w, bx, ty, bx + bw, ty + bh, w, h, 220, 24, 24, 24);
+      DrawUtf8(mem, bx + 6, ty + 4, bw - 12, bh - 8,
+               committed[static_cast<size_t>(hover_i)].text, RGB(255, 255, 255));
+      DrawUtf8(mem, bx + 6, ty + 22, bw - 12, 14, "点击复制译文", RGB(180, 180, 180));
+      FixAlpha(px, w, h, bx, ty, bx + bw, ty + bh);
+    }
   }
 
   POINT ptSrc{0, 0};
@@ -535,7 +624,9 @@ void SetEditing(OverlayBox* box, bool editing) {
   box->editing = editing;
   box->state = editing ? lenstrans::BoxState::Editing : (g.paused.load() ? lenstrans::BoxState::Paused
                                                                          : lenstrans::BoxState::Watching);
-  ApplyExStyle(box->hwnd, !editing);
+  // Viewing mode remains interactive so the whole rectangle can be dragged. The
+  // captured source is already excluded from the overlay by the capture adapter.
+  ApplyExStyle(box->hwnd, false);
   PaintBox(box);
 }
 
@@ -590,7 +681,8 @@ void ApplyHitMove(OverlayBox* box, int mx, int my) {
     else
       r.bottom = r.top + kMinSize;
   }
-  SetWindowPos(box->hwnd, HWND_TOPMOST, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_NOACTIVATE);
+  SetWindowPos(box->hwnd, HWND_TOPMOST, r.left, r.top, r.right - r.left, r.bottom - r.top,
+               SWP_NOACTIVATE | SWP_NOOWNERZORDER);
   RECT client{};
   GetClientRect(box->hwnd, &client);
   POINT tl{0, 0};
@@ -619,26 +711,13 @@ void LogA(const std::string& s) {
 }
 
 std::string FindModel() {
-  if (!g.settings.model_path.empty()) return g.settings.model_path;
-  char exe[MAX_PATH]{};
-  GetModuleFileNameA(nullptr, exe, MAX_PATH);
-  std::string dir = exe;
-  const auto slash = dir.find_last_of("\\/");
-  if (slash != std::string::npos) dir.resize(slash);
-  const std::string name = lenstrans::DefaultModelFileName();
-  const std::string cands[] = {dir + "\\..\\..\\models\\" + name, dir + "\\..\\models\\" + name,
-                               std::string("D:\\works\\LensTrans\\models\\") + name,
-                               dir + "\\" + name};
-  for (const auto& p : cands) {
-    if (GetFileAttributesA(p.c_str()) != INVALID_FILE_ATTRIBUTES) return p;
-  }
-  return std::string("D:\\works\\LensTrans\\models\\") + name;
+  return lenstrans::FindDefaultModelPath(g.settings.model_path);
 }
 
-std::string FindCli() {
-  const char* p = "D:\\works\\LensTrans\\third_party\\llama.cpp\\build\\bin\\Release\\llama-cli.exe";
-  if (GetFileAttributesA(p) != INVALID_FILE_ATTRIBUTES) return p;
-  return {};
+std::string FindCli() { return lenstrans::FindLlamaCliPath(); }
+
+std::string EvalOutPath(const char* name) {
+  return lenstrans::JoinPath(lenstrans::EvalOutDir(), name);
 }
 
 void RegisterAppHotkeys() {
@@ -765,6 +844,7 @@ void WorkerLoop() {
       }
     }
     const auto tick = std::chrono::steady_clock::now();
+    if (g.local) g.local->MaybeIdleUnload(lenstrans::kLocalIdleUnloadMs);
     bool any_awake = false;
     if (!sleep_all) {
       for (int bi = 0; bi < nbox; ++bi) {
@@ -798,6 +878,14 @@ void WorkerLoop() {
           box->cap.Start(box->hwnd, phys, WgcCaptureTarget());
         }
         continue;
+      }
+      if (frame.source == "wgc") {
+        box->fallback_ticks = 0;
+      } else if (++box->fallback_ticks >= 100) {
+        // A fallback frame is useful immediately, but periodically retry WGC so
+        // a transient permission/device failure can recover without interrupting OCR.
+        box->fallback_ticks = 0;
+        box->cap.Start(box->hwnd, phys, WgcCaptureTarget());
       }
       if ((g.e2e_wgc_window || g.e2e_wgc_monitor) && frame.source == "wgc") g.e2e_saw_wgc = true;
       if (box->prev.empty() || box->prev_w != frame.w || box->prev_h != frame.h) {
@@ -934,9 +1022,7 @@ void SaveAllBoxes() {
     p.render = b->render;
     rows.push_back(p);
   }
-  const std::string path = lenstrans::win::ConfigDir() + "\\boxes.cfg";
-  std::ofstream f(path, std::ios::binary);
-  if (f) f << lenstrans::SerializeBoxes(rows);
+  lenstrans::win::WriteConfigFile("boxes.cfg", lenstrans::SerializeBoxes(rows));
 }
 
 void RemapAllBoxes() {
@@ -1063,7 +1149,7 @@ void OnTray(lenstrans::win::TrayCmd cmd) {
       PostQuitMessage(0);
       break;
   }
-  lenstrans::SaveSettingsFile(lenstrans::win::ConfigDir() + "\\settings.cfg", g.settings);
+  lenstrans::win::WriteConfigFile("settings.cfg", lenstrans::SerializeSettings(g.settings));
 }
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
@@ -1092,9 +1178,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
       if (box) PaintBox(box);
       return 0;
     case WM_LBUTTONDOWN: {
-      if (!box || !box->editing) return 0;
+      if (!box) return 0;
       box->hit = HitTest(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam), box->width, box->height);
-      if (box->hit == Hit::None) return 0;
+      if (box->editing) {
+        if (box->hit == Hit::None) return 0;
+      } else {
+        // In viewing mode any interior point moves the box; this avoids an invisible
+        // drag strip and keeps the hit target stable over translated text.
+        box->hit = Hit::Drag;
+      }
       SetCapture(hwnd);
       box->dragging = true;
       GetWindowRect(hwnd, &box->start);
@@ -1102,7 +1194,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
       return 0;
     }
     case WM_MOUSEMOVE: {
-      if (box && box->editing && !box->dragging) {
+      if (box && !box->dragging) {
         SetCursor(LoadCursorW(nullptr, CursorFor(HitTest(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam),
                                                          box->width, box->height))));
       }
@@ -1115,6 +1207,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     case WM_LBUTTONUP:
       if (box && box->dragging) {
         ReleaseCapture();
+        box->dragging = false;
+        box->hit = Hit::None;
+      }
+      return 0;
+    case WM_CAPTURECHANGED:
+      if (box && box->dragging) {
         box->dragging = false;
         box->hit = Hit::None;
       }
@@ -1212,7 +1310,7 @@ bool WriteBgraBmp(const lenstrans::win::BgraFrame& fr, const char* path) {
   fh.bfType = 0x4D42;
   fh.bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
   fh.bfSize = fh.bfOffBits + px;
-  CreateDirectoryA("D:\\works\\LensTrans\\tools\\eval\\out", nullptr);
+  lenstrans::EnsureDir(lenstrans::EvalOutDir());
   std::ofstream f(path, std::ios::binary);
   if (!f) return false;
   f.write(reinterpret_cast<const char*>(&fh), sizeof(fh));
@@ -1242,7 +1340,7 @@ bool WriteScreenBmp(const RECT& r, const char* path) {
   fh.bfType = 0x4D42;
   fh.bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
   fh.bfSize = fh.bfOffBits + px;
-  CreateDirectoryA("D:\\works\\LensTrans\\tools\\eval\\out", nullptr);
+  lenstrans::EnsureDir(lenstrans::EvalOutDir());
   std::ofstream f(path, std::ios::binary);
   bool ok = false;
   if (f && bits) {
@@ -1271,8 +1369,8 @@ void PumpPendingMessages() {
 }
 
 void WriteHotkeyProbeArtifacts() {
-  CreateDirectoryA("D:\\works\\LensTrans\\tools\\eval\\out", nullptr);
-  std::ofstream f("D:\\works\\LensTrans\\tools\\eval\\out\\hotkey-probe.md", std::ios::binary);
+  lenstrans::EnsureDir(lenstrans::EvalOutDir());
+  std::ofstream f(EvalOutPath("hotkey-probe.md"), std::ios::binary);
   if (!f) return;
   f << "# Hotkey WM_HOTKEY probe (edit / click-through toggle)\n\n"
     << "- command: `.\\build\\Release\\lenstrans_overlay.exe --e2e-hotkey-probe --no-onboard`\n"
@@ -1315,12 +1413,12 @@ void RunHotkeyProbeOnce() {
 }
 
 void WriteUiHwndArtifacts() {
-  CreateDirectoryA("D:\\works\\LensTrans\\tools\\eval\\out", nullptr);
+  lenstrans::EnsureDir(lenstrans::EvalOutDir());
   const HWND settings = FindWindowW(L"LensTransSettings", L"LensTrans 设置");
   const HWND onboard = FindWindowW(L"LensTransOnboard", nullptr);
   g.e2e_ui_settings = settings != nullptr;
   g.e2e_ui_onboard = onboard != nullptr;
-  std::ofstream f("D:\\works\\LensTrans\\tools\\eval\\out\\ui-hwnd.md", std::ios::binary);
+  std::ofstream f(EvalOutPath("ui-hwnd.md"), std::ios::binary);
   if (!f) return;
   f << "# UI HWND probe\n\n"
     << "- command: `.\\build\\Release\\lenstrans_overlay.exe --e2e-ui " << g.e2e_ui_sec << "`\n"
@@ -1364,8 +1462,8 @@ void WriteE2eArtifacts() {
                         : two_box            ? "overlay-two-box.md"
                         : g.e2e_contrast     ? "overlay-contrast-e2e.md"
                                              : "overlay-e2e.md";
-  const std::string bmp_path = std::string("D:\\works\\LensTrans\\tools\\eval\\out\\") + bmp_name;
-  const std::string md_path = std::string("D:\\works\\LensTrans\\tools\\eval\\out\\") + md_name;
+  const std::string bmp_path = EvalOutPath(bmp_name);
+  const std::string md_path = EvalOutPath(md_name);
   const bool bmp_ok = WriteScreenBmp(shot, bmp_path.c_str());
   std::string log;
   {
@@ -1627,12 +1725,13 @@ void LogWsSample(int elapsed) {
 
 int Run() {
   SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-  g.settings = lenstrans::LoadSettingsFile(lenstrans::win::ConfigDir() + "\\settings.cfg");
+  g.settings = lenstrans::LoadSettingsFile(lenstrans::win::ConfigPath("settings.cfg"));
   if (g.e2e_contrast) {
     g.settings.contrast = true;
     g.settings.render = lenstrans::RenderLock::Sticker;
   }
-  lenstrans::win::UnprotectFromFile(lenstrans::win::ConfigDir() + "\\api_key.dpapi", g.api_key);
+  const std::string key_path = lenstrans::win::ConfigPath("api_key.dpapi");
+  if (!key_path.empty()) lenstrans::win::UnprotectFromFile(key_path, g.api_key);
   g.settings.autostart = lenstrans::win::AutostartEnabled();
   const bool probe = g.ws_probe_sec > 0;
   const bool e2e_ui = g.e2e_ui;
@@ -1754,7 +1853,7 @@ int Run() {
     } else {
       bool restored = false;
       if (g.settings.restore_boxes) {
-        std::ifstream bf(lenstrans::win::ConfigDir() + "\\boxes.cfg", std::ios::binary);
+        std::ifstream bf(lenstrans::win::ConfigPath("boxes.cfg"), std::ios::binary);
         if (bf) {
           std::ostringstream ss;
           ss << bf.rdbuf();

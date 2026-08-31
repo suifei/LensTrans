@@ -1,7 +1,10 @@
 #pragma once
 
+#include "lenstrans/model_meta.hpp"
+#include "lenstrans/present.hpp"
 #include "lenstrans/router.hpp"
 
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -12,6 +15,7 @@ struct TranslateRequest {
   std::string src_lang = "auto";
   std::string tgt_lang = "zh";
   bool quality = false;
+  PresentationSemantics presentation{};
 };
 
 struct TranslateResult {
@@ -53,6 +57,10 @@ class IEngine {
   virtual ~IEngine() = default;
   virtual bool Ready() const = 0;
   virtual TranslateResult Translate(const TranslateRequest& req) = 0;
+  // Local llama: unload weights after kLocalIdleUnloadMs with no Translate (PRD).
+  virtual void NoteActivity() {}
+  virtual void MaybeIdleUnload(std::int64_t /*idle_ms*/ = 0) {}
+  virtual void Unload() {}
 };
 
 std::unique_ptr<IEngine> MakeLocalEngine(const std::string& model_path, const std::string& cli_path);

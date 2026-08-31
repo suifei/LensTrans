@@ -3,10 +3,11 @@
 #include "lenstrans/cache.hpp"
 #include "lenstrans/cloud_http.hpp"
 #include "lenstrans/geom.hpp"
-#include "lenstrans/inject_pipeline.hpp"
 #include "lenstrans/dispatch.hpp"
 #include "lenstrans/engine.hpp"
 #include "lenstrans/frame_diff.hpp"
+#include "lenstrans/model_meta.hpp"
+#include "lenstrans/paths.hpp"
 #include "lenstrans/pipeline.hpp"
 #include "lenstrans/present.hpp"
 #include "lenstrans/router.hpp"
@@ -16,6 +17,8 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -41,18 +44,69 @@ static void FillSolid(std::vector<std::uint8_t>& img, int w, int h, int b, int g
   }
 }
 
+struct TestCapture final : ICaptureProvider {
+  int calls = 0;
+  bool Capture(CapturedFrame& frame, const CancellationToken&) override {
+    ++calls;
+    frame.width = 320;
+    frame.height = 180;
+    frame.stride_bytes = frame.width * 4;
+    frame.sequence = static_cast<std::uint64_t>(calls);
+    frame.bgra.assign(static_cast<std::size_t>(frame.stride_bytes) * frame.height, 255);
+    return true;
+  }
+};
+
+struct TestOcr final : IOcrProvider {
+  int calls = 0;
+  bool Recognize(const CapturedFrame&, const CancellationToken&, std::vector<OcrBlock>& blocks) override {
+    ++calls;
+    blocks = {
+        {"Hello", {10, 12, 40, 20}, 20, {0, 0, 0}, {255, 255, 255}, 2},
+        {"world", {58, 12, 40, 20}, 20, {0, 0, 0}, {255, 255, 255}, 2},
+        {"Second line", {10, 64, 110, 20}, 20, {0, 0, 0}, {240, 240, 240}, 40},
+    };
+    return true;
+  }
+};
+
+struct TestPresenter final : IPresentationSink {
+  int calls = 0;
+  PresentationFrame last;
+  bool Present(const PresentationFrame& frame, const CancellationToken&) override {
+    ++calls;
+    last = frame;
+    return true;
+  }
+};
+
 int main() {
   // SHA-1: "abc" → a9993e364706816aba3e25717850c26c9cd0d89d
   CHECK(Sha1Hex("abc") == "a9993e364706816aba3e25717850c26c9cd0d89d");
-  CHECK(CacheKey("en", "hello") == Sha1Hex(std::string("en") + "hello"));
-  CHECK(CacheKey("en", "hello") != CacheKey("zh", "hello"));
+  const PresentationSemantics default_presentation{};
+  CHECK(CacheKey("en", "zh", "hello") ==
+        CacheKey("en", "zh", "hello", false, default_presentation));
+  CHECK(CacheKey("en", "zh", "hello") !=
+        CacheKey("en", "zh", "hello", false, default_presentation, "auto", "zh"));
+  CHECK(CacheKey("en", "zh", "hello") != CacheKey("zh", "zh", "hello"));
+  CHECK(CacheKey("en", "zh", "hello") != CacheKey("en", "en", "hello"));
+  CHECK(CacheKey("en", "zh", "hello") != CacheKey("en", "zh", "hello", true));
+  CHECK(CacheKey("en", "zh", "a|b") != CacheKey("en", "zh", "a", false, {}, "auto", "zh"));
+  {
+    PresentationSemantics p = default_presentation;
+    p.contrast = true;
+    p.sticker_alpha = 80;
+    CHECK(CacheKey("en", "zh", "hello", false, p) != CacheKey("en", "zh", "hello"));
+    CHECK(CacheKey("en", "zh", "hello", false, {}, "auto", "zh") !=
+          CacheKey("en", "zh", "hello", false, {}, "ja", "zh"));
+  }
 
   TranslationCache cache;
   std::string miss;
   CHECK(!cache.Get("k", miss));
-  cache.Put(CacheKey("en", "hi"), "你好");
+  cache.Put(CacheKey("en", "zh", "hi"), "你好");
   std::string hit;
-  CHECK(cache.Get(CacheKey("en", "hi"), hit) && hit == "你好");
+  CHECK(cache.Get(CacheKey("en", "zh", "hi"), hit) && hit == "你好");
   CHECK(cache.Size() == 1);
   cache.Clear();
   CHECK(cache.Size() == 0);
@@ -112,7 +166,7 @@ int main() {
   {
     int tr = 140, tg = 140, tb = 140;
     EnsureAaColor(tr, tg, tb, 128, 128, 128);
-    CHECK(tr == 127 && tg == 127 && tb == 127);
+    CHECK(ContrastRatio(tr, tg, tb, 128, 128, 128) >= kWcagAaContrast);
     CHECK(tr != 140);
   }
 
@@ -132,6 +186,27 @@ int main() {
   const Settings s3 = ParseSettings(SerializeSettings(s2));
   CHECK(s3.privacy && s3.cloud_base_url == "https://example.invalid/v1");
   CHECK(s3.vk_new == 'Q' && s3.mod_new == 3);
+  {
+    const Settings bad = ParseSettings(
+        "engine=garbage\n"
+        "sticker_alpha=not-an-int\n"
+        "font_scale=-500\n"
+        "overlay_alpha=not-a-float\n"
+        "vk_new=bad\n"
+        "mod_new=3x\n");
+    CHECK(bad.engine == EnginePref::Auto);
+    CHECK(bad.sticker_alpha == 92);
+    CHECK(bad.font_scale == 80);
+    CHECK(std::isfinite(bad.overlay_alpha) && bad.overlay_alpha == 0.01f);
+    CHECK(bad.vk_new == 'L' && bad.mod_new == 6);
+  }
+  {
+    const Settings bounded = ParseSettings(
+        "sticker_alpha=1\nfont_scale=999\noverlay_alpha=999\n");
+    CHECK(bounded.sticker_alpha == 60);
+    CHECK(bounded.font_scale == 150);
+    CHECK(std::isfinite(bounded.overlay_alpha) && bounded.overlay_alpha == 0.10f);
+  }
 
   OcrBlock blk;
   blk.text = "Hello";
@@ -340,30 +415,14 @@ int main() {
   }
 
   {
-    auto fake = MakeFakeEngine(EngineKind::Local, true, "你好", "");
-    TranslationCache ic;
-    const auto solid = RunInjectedFramePipeline(false, fake.get(), &ic, "HELLO");
-    CHECK(solid.diff_changed >= 1);
-    CHECK(solid.stabilized);
-    CHECK(solid.src_text == "HELLO");
-    CHECK(solid.translation == "你好");
-    CHECK(solid.cache_hit);
-    CHECK(solid.variance < kImmersiveVariance);
-    CHECK(solid.plan.mode == PresentMode::Immersive);
-    CHECK(solid.plan.covers_source);
-    CHECK(!IllegalTransparentStack(solid.plan));
-    TranslationCache ic2;
-    const auto busy = RunInjectedFramePipeline(true, fake.get(), &ic2, "HELLO");
-    CHECK(busy.diff_changed >= 1);
-    CHECK(busy.stabilized);
-    CHECK(busy.variance >= kImmersiveVariance);
-    CHECK(busy.plan.mode == PresentMode::Sticker);
-    CHECK(busy.plan.covers_source);
-    CHECK(!IllegalTransparentStack(busy.plan));
     OcrBlock hi;
+    hi.text = "Hi";
+    hi.bbox = {10, 10, 40, 20};
     hi.bg_variance = 40;
     const auto bad = PlanPresent(hi, false, RenderLock::Auto, 20);
     CHECK(IllegalTransparentStack(bad));
+    const auto good = PlanPresent(hi, false, RenderLock::Auto, 92);
+    CHECK(good.covers_source && !IllegalTransparentStack(good));
   }
   {
     OcrBlock src;
@@ -385,6 +444,73 @@ int main() {
     CHECK(!plan.show_source);
     CHECK(plan.source_text.empty());
   }
+  {
+    OcrBlock invalid;
+    invalid.text = "invalid";
+    invalid.bbox = {0, 0, 0, 10};
+    OcrBlock left;
+    left.text = "Hello";
+    left.bbox = {10, 10, 30, 20};
+    OcrBlock right;
+    right.text = "world";
+    right.bbox = {48, 10, 30, 20};
+    OcrBlock next;
+    next.text = "Next";
+    next.bbox = {10, 60, 50, 20};
+    const auto normalized = NormalizeOcrBlocks({next, invalid, right, left}, 100, 100);
+    CHECK(normalized.size() == 2);
+    CHECK(normalized[0].text == "Hello world");
+    CHECK(normalized[0].bbox.x == 10 && normalized[0].bbox.w == 68);
+    CHECK(normalized[1].text == "Next");
+  }
+  {
+    auto fake = MakeFakeEngine(EngineKind::Local, true, "translated text that wraps", "");
+    TestCapture capture;
+    TestOcr ocr;
+    TestPresenter presenter;
+    TranslationCache pipeline_cache;
+    PipelineOptions options;
+    options.settings.engine = EnginePref::Local;
+    options.settings.src_lang = "en";
+    options.settings.tgt_lang = "zh";
+    options.target_width = 160;
+    options.target_height = 120;
+    Pipeline pipeline({&capture, &ocr, &presenter, fake.get(), nullptr, &pipeline_cache}, options);
+    const auto first = pipeline.Step();
+    CHECK(first.state == PipelineState::Watching && !first.stabilized && !first.rendered);
+    const auto second = pipeline.Step();
+    CHECK(second.state == PipelineState::Watching && second.stabilized && second.rendered);
+    CHECK(second.blocks.size() == 2 && second.layout.size() == 2);
+    if (second.blocks.size() == 2 && second.layout.size() == 2) {
+      CHECK(!second.blocks[0].from_cache && !second.blocks[1].from_cache);
+      CHECK(second.blocks[0].source.text == "Hello world");
+      CHECK(second.layout[0].lines.size() >= 2);
+      for (const auto& layout : second.layout) {
+        CHECK(layout.rect.x >= 0 && layout.rect.y >= 0);
+        CHECK(layout.rect.x + layout.rect.w <= options.target_width);
+        CHECK(layout.rect.y + layout.rect.h <= options.target_height);
+        CHECK(layout.rect.w > 0 && layout.rect.h > 0);
+        CHECK(layout.covers_source && layout.background_alpha >= 0.60f);
+      }
+      CHECK(second.layout[1].mode == PresentMode::Sticker);
+    }
+    CHECK(presenter.calls == 1 && presenter.last.blocks.size() == 2);
+    pipeline.Pause();
+    CHECK(pipeline.state() == PipelineState::Paused);
+    const auto paused = pipeline.Step();
+    CHECK(paused.state == PipelineState::Paused && capture.calls == 2);
+    pipeline.Resume();
+    CHECK(pipeline.state() == PipelineState::Idle);
+    const auto cached = pipeline.Step();
+    CHECK(cached.state == PipelineState::Watching && cached.stabilized && cached.rendered);
+    CHECK(cached.blocks.size() == 2 && cached.layout.size() == 2);
+    if (cached.blocks.size() == 2) {
+      CHECK(cached.blocks[0].from_cache && cached.blocks[1].from_cache);
+    }
+    CHECK(capture.calls == 3 && ocr.calls == 3 && presenter.calls == 2);
+    pipeline.Cancel();
+    CHECK(pipeline.state() == PipelineState::Cancelled);
+  }
   CHECK(QuoteRunPath("C:\\LensTrans\\app.exe") == "C:\\LensTrans\\app.exe");
   CHECK(QuoteRunPath("C:\\Program Files\\LensTrans\\app.exe") ==
         "\"C:\\Program Files\\LensTrans\\app.exe\"");
@@ -392,6 +518,24 @@ int main() {
         "C:\\Program Files\\LensTrans\\app.exe");
   CHECK(RunValuePointsTo("\"C:\\a b\\app.exe\"", "C:\\a b\\app.exe"));
   CHECK(!RunValuePointsTo("C:\\other.exe", "C:\\a\\app.exe"));
+
+  CHECK(kDefaultGgufBytes == 491400032ull);
+  CHECK(IsDefaultGgufSha256(kDefaultGgufSha256));
+  CHECK(IsDefaultGgufSha256("74A4DA8C9FDBCD15BD1F6D01D621410D31C6FC00986F5EB687824E7B93D7A9DB"));
+  CHECK(!IsDefaultGgufSha256("deadbeef"));
+  CHECK(DefaultModelFileName() == kDefaultGgufFileName);
+  CHECK(kLocalIdleUnloadMs == 10 * 60 * 1000);
+#ifndef _WIN32
+  {
+    // Do not hardcode /workspace — CI checkouts live under /home/runner/work/...
+    if (const char* prev = std::getenv("LENSTRANS_ROOT"); prev && *prev) {
+      CHECK(FileExists(JoinPath(prev, "CMakeLists.txt")));
+    } else {
+      const std::string root = DetectRepoRoot();
+      CHECK(FileExists(JoinPath(root, "CMakeLists.txt")) || FileExists("CMakeLists.txt"));
+    }
+  }
+#endif
 
   if (g_fail) {
     std::fprintf(stderr, "%d checks failed\n", g_fail);

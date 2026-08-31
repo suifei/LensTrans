@@ -6,20 +6,23 @@
 
 #include "win/app/ui.hpp"
 #include "win/app/secrets.hpp"
+#include "win/app/model_download.hpp"
 #include "win/capture/capture.hpp"
+#include "lenstrans/paths.hpp"
 #include "lenstrans/present.hpp"
+#include "lenstrans/model_meta.hpp"
 
 #include <commctrl.h>
 #include <shellapi.h>
 
 #include <algorithm>
 #include <string>
+#include <thread>
 
 using lenstrans::EnginePref;
 using lenstrans::FindHotkeyConflict;
 using lenstrans::FormatHotkey;
 using lenstrans::RenderLock;
-using lenstrans::SaveSettingsFile;
 using lenstrans::Settings;
 
 #pragma comment(lib, "comctl32.lib")
@@ -242,8 +245,9 @@ void Collect(HWND dlg, SettingsUi* ui) {
   s.vk_hide = ui->hk_vk[3];
   s.mod_settings = ui->hk_mod[4];
   s.vk_settings = ui->hk_vk[4];
-  ProtectToFile(ConfigDir() + "\\api_key.dpapi", ui->hooks->api_key ? *ui->hooks->api_key : "");
-  SaveSettingsFile(ConfigDir() + "\\settings.cfg", s);
+  const std::string key_path = ConfigPath("api_key.dpapi");
+  if (!key_path.empty()) ProtectToFile(key_path, ui->hooks->api_key ? *ui->hooks->api_key : "");
+  WriteConfigFile("settings.cfg", lenstrans::SerializeSettings(s));
   if (ui->hooks->on_settings_saved) ui->hooks->on_settings_saved();
   (void)dlg;
 }
@@ -475,7 +479,7 @@ void ShowSettingsWindow(HWND owner, AppHooks& hooks) {
 }
 
 bool FirstRun() {
-  const std::string p = ConfigDir() + "\\settings.cfg";
+  const std::string p = ConfigPath("settings.cfg");
   return GetFileAttributesA(p.c_str()) == INVALID_FILE_ATTRIBUTES;
 }
 
@@ -532,9 +536,10 @@ void PaintOnbStep(OnbUi* o) {
   } else {
     title = L"LensTrans 引导 3/3 — 本地引擎";
     body =
-        L"默认使用已下载的 Qwen2.5-0.5B Instruct Q4_K_M（约 491MB）。\n"
+        L"默认使用官方 Qwen2.5-0.5B Instruct Q4_K_M（约 491MB）。\n"
+        L"勾选后将按需下载（断点续传 + SHA256 校验）；已存在且校验通过则跳过。\n"
         L"云端 Base URL / API Key / Model 全部留空。\n\n"
-        L"勾选后本机加载模型；不勾选仍创建翻译框，但不加载模型。";
+        L"不勾选仍可创建翻译框（仅云端需自行配置）；下载失败不阻塞完成。";
     if (o->local) ShowWindow(o->local, SW_SHOW);
     EnableWindow(o->back, TRUE);
     SetWindowTextW(o->next, L"完成");
@@ -564,8 +569,17 @@ LRESULT CALLBACK OnbProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             o->hooks->settings->download_model =
                 o->local && SendMessageW(o->local, BM_GETCHECK, 0, 0) == BST_CHECKED;
           }
-          SaveSettingsFile(ConfigDir() + "\\settings.cfg",
-                           o->hooks && o->hooks->settings ? *o->hooks->settings : Settings{});
+          WriteConfigFile("settings.cfg", lenstrans::SerializeSettings(
+                                             o->hooks && o->hooks->settings ? *o->hooks->settings : Settings{}));
+          if (o->hooks && o->hooks->settings && o->hooks->settings->download_model) {
+            const std::string dest = lenstrans::FindDefaultModelPath();
+            std::string err;
+            // Background: do not block onboarding completion on network.
+            std::thread([dest]() {
+              std::string e;
+              DownloadDefaultGguf(dest, nullptr, e);
+            }).detach();
+          }
           o->done = true;
           o->ok = true;
           DestroyWindow(hwnd);

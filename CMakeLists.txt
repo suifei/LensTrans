@@ -8,7 +8,58 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(LLAMA_PREBUILT "${CMAKE_SOURCE_DIR}/third_party/llama.cpp/build")
 set(LLAMA_SRC "${CMAKE_SOURCE_DIR}/third_party/llama.cpp")
 set(HAVE_PREBUILT_LLAMA OFF)
-if(EXISTS "${LLAMA_PREBUILT}/src/Release/llama.lib" AND EXISTS "${LLAMA_SRC}/include/llama.h")
+set(LLAMA_LIB "")
+set(GGML_LIB "")
+set(GGML_BASE_LIB "")
+set(GGML_CPU_LIB "")
+set(LLAMA_BIN_DIR "")
+
+# Multi-config (VS) and single-config (Ninja) layouts.
+foreach(_cand
+    "${LLAMA_PREBUILT}/src/Release/llama.lib"
+    "${LLAMA_PREBUILT}/src/llama.lib"
+    "${LLAMA_PREBUILT}/Release/llama.lib")
+  if(EXISTS "${_cand}")
+    set(LLAMA_LIB "${_cand}")
+    break()
+  endif()
+endforeach()
+foreach(_cand
+    "${LLAMA_PREBUILT}/ggml/src/Release/ggml.lib"
+    "${LLAMA_PREBUILT}/ggml/src/ggml.lib"
+    "${LLAMA_PREBUILT}/ggml/Release/ggml.lib")
+  if(EXISTS "${_cand}")
+    set(GGML_LIB "${_cand}")
+    break()
+  endif()
+endforeach()
+foreach(_cand
+    "${LLAMA_PREBUILT}/ggml/src/Release/ggml-base.lib"
+    "${LLAMA_PREBUILT}/ggml/src/ggml-base.lib")
+  if(EXISTS "${_cand}")
+    set(GGML_BASE_LIB "${_cand}")
+    break()
+  endif()
+endforeach()
+foreach(_cand
+    "${LLAMA_PREBUILT}/ggml/src/Release/ggml-cpu.lib"
+    "${LLAMA_PREBUILT}/ggml/src/ggml-cpu.lib")
+  if(EXISTS "${_cand}")
+    set(GGML_CPU_LIB "${_cand}")
+    break()
+  endif()
+endforeach()
+foreach(_cand
+    "${LLAMA_PREBUILT}/bin/Release"
+    "${LLAMA_PREBUILT}/bin"
+    "${LLAMA_PREBUILT}/Release")
+  if(EXISTS "${_cand}/llama.dll" OR EXISTS "${_cand}/llama.lib")
+    set(LLAMA_BIN_DIR "${_cand}")
+    break()
+  endif()
+endforeach()
+
+if(EXISTS "${LLAMA_SRC}/include/llama.h" AND LLAMA_LIB AND GGML_LIB AND GGML_BASE_LIB AND GGML_CPU_LIB)
   set(HAVE_PREBUILT_LLAMA ON)
 endif()
 
@@ -18,6 +69,7 @@ add_library(lenstrans_core STATIC
   core/src/engine_local.cpp
   core/src/engine_cloud.cpp
   core/src/engine_fake.cpp
+  core/src/pipeline.cpp
 )
 target_include_directories(lenstrans_core PUBLIC "${CMAKE_SOURCE_DIR}/core/include")
 if(WIN32)
@@ -30,22 +82,21 @@ if(LENSTRANS_WITH_LLAMA AND HAVE_PREBUILT_LLAMA)
     "${LLAMA_SRC}/include"
     "${LLAMA_SRC}/ggml/include")
   target_link_libraries(lenstrans_core PUBLIC
-    "${LLAMA_PREBUILT}/src/Release/llama.lib"
-    "${LLAMA_PREBUILT}/ggml/src/Release/ggml.lib"
-    "${LLAMA_PREBUILT}/ggml/src/Release/ggml-base.lib"
-    "${LLAMA_PREBUILT}/ggml/src/Release/ggml-cpu.lib")
-  message(STATUS "LensTrans: linking prebuilt llama.cpp at ${LLAMA_PREBUILT}")
+    "${LLAMA_LIB}" "${GGML_LIB}" "${GGML_BASE_LIB}" "${GGML_CPU_LIB}")
+  message(STATUS "LensTrans: linking llama=${LLAMA_LIB}")
 elseif(LENSTRANS_WITH_LLAMA)
   message(FATAL_ERROR "LENSTRANS_WITH_LLAMA=ON but prebuilt llama.lib missing")
 endif()
 
 function(lenstrans_copy_llama tgt)
-  if(LENSTRANS_WITH_LLAMA AND HAVE_PREBUILT_LLAMA)
+  if(LENSTRANS_WITH_LLAMA AND HAVE_PREBUILT_LLAMA AND LLAMA_BIN_DIR)
     foreach(dll llama.dll ggml.dll ggml-base.dll ggml-cpu.dll)
-      add_custom_command(TARGET ${tgt} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-          "${LLAMA_PREBUILT}/bin/Release/${dll}"
-          "$<TARGET_FILE_DIR:${tgt}>/${dll}")
+      if(EXISTS "${LLAMA_BIN_DIR}/${dll}")
+        add_custom_command(TARGET ${tgt} POST_BUILD
+          COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${LLAMA_BIN_DIR}/${dll}"
+            "$<TARGET_FILE_DIR:${tgt}>/${dll}")
+      endif()
     endforeach()
   endif()
 endfunction()
@@ -83,10 +134,11 @@ if(WIN32)
     win/ocr/winrt_ocr.cpp
     win/app/secrets.cpp
     win/app/ui.cpp
+    win/app/model_download.cpp
   )
   target_include_directories(lenstrans_overlay PRIVATE "${CMAKE_SOURCE_DIR}")
   target_link_libraries(lenstrans_overlay PRIVATE
-    lenstrans_core user32 gdi32 comctl32 shell32 ole32 dwmapi d3d11 dxgi windowsapp)
+    lenstrans_core user32 gdi32 comctl32 shell32 ole32 dwmapi d3d11 dxgi windowsapp bcrypt)
   target_compile_definitions(lenstrans_overlay PRIVATE UNICODE _UNICODE NOMINMAX WINVER=0x0A00
                                                        _WIN32_WINNT=0x0A00 NTDDI_VERSION=0x0A000010)
   if(MSVC)

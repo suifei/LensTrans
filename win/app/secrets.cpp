@@ -13,6 +13,9 @@
 #pragma comment(lib, "winhttp.lib")
 
 #include <fstream>
+#include <filesystem>
+#include <cctype>
+#include <system_error>
 #include <string>
 #include <vector>
 
@@ -22,12 +25,34 @@
 
 namespace lenstrans::win {
 
+static std::string NarrowPath(const wchar_t* w);
+static std::wstring WidePath(const std::string& s);
+static bool WriteAtomic(const std::string& path, const void* data, std::size_t size);
+
 std::string ConfigDir() {
-  char path[MAX_PATH]{};
-  if (FAILED(SHGetFolderPathA(nullptr, CSIDL_LOCAL_APPDATA, nullptr, 0, path))) return ".";
-  std::string dir = std::string(path) + "\\LensTrans";
-  CreateDirectoryA(dir.c_str(), nullptr);
-  return dir;
+  PWSTR known = nullptr;
+  if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_DEFAULT, nullptr, &known))) return {};
+  const std::wstring base(known);
+  CoTaskMemFree(known);
+  if (base.empty()) return {};
+  const std::wstring dir = base + L"\\LensTrans";
+  if (!CreateDirectoryW(dir.c_str(), nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) return {};
+  return NarrowPath(dir.c_str());
+}
+
+std::string ConfigPath(const char* file_name) {
+  if (!file_name || !*file_name) return {};
+  for (const char* p = file_name; *p; ++p) {
+    const unsigned char c = static_cast<unsigned char>(*p);
+    if (!(std::isalnum(c) || c == '.' || c == '_' || c == '-')) return {};
+  }
+  const std::string dir = ConfigDir();
+  return dir.empty() ? std::string{} : dir + "\\" + file_name;
+}
+
+bool WriteConfigFile(const char* file_name, const std::string& body) {
+  const std::string path = ConfigPath(file_name);
+  return !path.empty() && WriteAtomic(path, body.data(), body.size());
 }
 
 bool ProtectToFile(const std::string& path, const std::string& plain) {
@@ -35,14 +60,9 @@ bool ProtectToFile(const std::string& path, const std::string& plain) {
   in.pbData = reinterpret_cast<BYTE*>(const_cast<char*>(plain.data()));
   in.cbData = static_cast<DWORD>(plain.size());
   if (!CryptProtectData(&in, L"LensTrans", nullptr, nullptr, nullptr, 0, &out)) return false;
-  std::ofstream f(path, std::ios::binary);
-  if (!f) {
-    LocalFree(out.pbData);
-    return false;
-  }
-  f.write(reinterpret_cast<char*>(out.pbData), out.cbData);
+  const bool ok = WriteAtomic(path, out.pbData, out.cbData);
   LocalFree(out.pbData);
-  return true;
+  return ok;
 }
 
 bool UnprotectFromFile(const std::string& path, std::string& plain) {
@@ -63,7 +83,7 @@ static std::string NarrowPath(const wchar_t* w) {
   if (!w || !w[0]) return {};
   const int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr);
   std::string s(static_cast<std::size_t>(n ? n - 1 : 0), 0);
-  if (n > 1) WideCharToMultiByte(CP_UTF8, 0, w, -1, s.data(), n, nullptr, nullptr);
+  if (n > 1) WideCharToMultiByte(CP_UTF8, 0, w, -1, s.data(), static_cast<int>(s.size()), nullptr, nullptr);
   return s;
 }
 
@@ -71,8 +91,32 @@ static std::wstring WidePath(const std::string& s) {
   if (s.empty()) return {};
   const int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
   std::wstring w(static_cast<std::size_t>(n ? n - 1 : 0), 0);
-  if (n > 1) MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, w.data(), n);
+  if (n > 1) MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, w.data(), static_cast<int>(w.size()));
   return w;
+}
+
+static bool WriteAtomic(const std::string& path, const void* data, std::size_t size) {
+  const std::wstring wide = WidePath(path);
+  if (wide.empty() || size > MAXDWORD) return false;
+  const std::wstring temp = wide + L".tmp." + std::to_wstring(GetCurrentProcessId()) + L"." +
+                            std::to_wstring(GetTickCount64());
+  HANDLE file = CreateFileW(temp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+                             FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (file == INVALID_HANDLE_VALUE) return false;
+  DWORD written = 0;
+  const BOOL ok = size == 0 || (WriteFile(file, data, static_cast<DWORD>(size), &written, nullptr) &&
+                                written == size);
+  FlushFileBuffers(file);
+  CloseHandle(file);
+  if (!ok) {
+    DeleteFileW(temp.c_str());
+    return false;
+  }
+  if (!MoveFileExW(temp.c_str(), wide.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+    DeleteFileW(temp.c_str());
+    return false;
+  }
+  return true;
 }
 
 void SetAutostart(bool on) {

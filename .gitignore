@@ -21,6 +21,10 @@ compile_commands.json
 /tools/eval/.venv/
 /tools/eval/out/
 
+# SwiftPM
+/mac/.build/
+/.build/
+
 *.pdb
 *.ilk
 *.obj

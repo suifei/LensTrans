@@ -1,7 +1,9 @@
 #include "lenstrans/engine.hpp"
+#include "lenstrans/model_meta.hpp"
 
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -37,7 +39,9 @@ std::string StripThink(std::string s) {
 #ifdef LENSTRANS_WITH_LLAMA
 class LlamaEngine final : public IEngine {
  public:
-  explicit LlamaEngine(std::string path) : path_(std::move(path)) {}
+  explicit LlamaEngine(std::string path) : path_(std::move(path)) {
+    last_activity_ = std::chrono::steady_clock::now();
+  }
   ~LlamaEngine() override { Unload(); }
 
   bool Ready() const override {
@@ -46,8 +50,34 @@ class LlamaEngine final : public IEngine {
 #ifdef _WIN32
     return GetFileAttributesA(path_.c_str()) != INVALID_FILE_ATTRIBUTES;
 #else
-    return false;
+    FILE* f = std::fopen(path_.c_str(), "rb");
+    if (!f) return false;
+    std::fclose(f);
+    return true;
 #endif
+  }
+
+  void NoteActivity() override { last_activity_ = std::chrono::steady_clock::now(); }
+
+  void Unload() override {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (ctx_) {
+      llama_free(ctx_);
+      ctx_ = nullptr;
+    }
+    if (model_) {
+      llama_model_free(model_);
+      model_ = nullptr;
+    }
+  }
+
+  void MaybeIdleUnload(std::int64_t idle_ms) override {
+    const auto limit = idle_ms > 0 ? idle_ms : kLocalIdleUnloadMs;
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::steady_clock::now() - last_activity_)
+                             .count();
+    if (elapsed < limit) return;
+    Unload();
   }
 
   bool Load() {
@@ -70,21 +100,10 @@ class LlamaEngine final : public IEngine {
     return true;
   }
 
-  void Unload() {
-    std::lock_guard<std::mutex> lock(mu_);
-    if (ctx_) {
-      llama_free(ctx_);
-      ctx_ = nullptr;
-    }
-    if (model_) {
-      llama_model_free(model_);
-      model_ = nullptr;
-    }
-  }
-
   TranslateResult Translate(const TranslateRequest& req) override {
     TranslateResult r;
     r.engine = EngineKind::Local;
+    NoteActivity();
     if (!Load()) {
       r.error = "local model load failed";
       return r;
@@ -134,7 +153,8 @@ class LlamaEngine final : public IEngine {
         llama_sampler_accept(smpl, id);
         if (llama_vocab_is_eog(vocab, id)) break;
         const std::string tok = piece(id);
-        if (tok.find("<|im_end|>") != std::string::npos || tok.find("<|endoftext|>") != std::string::npos)
+        if (tok.find("<|im_end|>") != std::string::npos ||
+            tok.find("<|endoftext|>") != std::string::npos)
           break;
         score += logprob_of(id);
         out += tok;
@@ -204,6 +224,7 @@ class LlamaEngine final : public IEngine {
     r.latency_ms = static_cast<int>(
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0)
             .count());
+    NoteActivity();
     return r;
   }
 
@@ -212,6 +233,7 @@ class LlamaEngine final : public IEngine {
   mutable std::mutex mu_;
   llama_model* model_ = nullptr;
   llama_context* ctx_ = nullptr;
+  std::chrono::steady_clock::time_point last_activity_{};
 };
 #endif
 
@@ -272,6 +294,17 @@ class CliEngine final : public IEngine {
 };
 #endif
 
+class UnconfiguredLocalEngine final : public IEngine {
+ public:
+  bool Ready() const override { return false; }
+  TranslateResult Translate(const TranslateRequest&) override {
+    TranslateResult r;
+    r.engine = EngineKind::Local;
+    r.error = "local engine unavailable";
+    return r;
+  }
+};
+
 }  // namespace
 
 std::unique_ptr<IEngine> MakeLocalEngine(const std::string& model_path, const std::string& cli_path) {
@@ -283,7 +316,7 @@ std::unique_ptr<IEngine> MakeLocalEngine(const std::string& model_path, const st
 #else
   (void)model_path;
   (void)cli_path;
-  return nullptr;
+  return std::make_unique<UnconfiguredLocalEngine>();
 #endif
 }
 
