@@ -131,7 +131,7 @@ class LlamaEngine final : public IEngine {
       llama_memory_clear(llama_get_memory(ctx_), true);
       constexpr int kPromptChunk = 512;
       for (int offset = 0; offset < n; offset += kPromptChunk) {
-        const int count = std::min(kPromptChunk, n - offset);
+        const int count = (std::min)(kPromptChunk, n - offset);
         llama_batch batch = llama_batch_get_one(tokens.data() + offset, count);
         if (llama_decode(ctx_, batch) != 0) return false;
       }
