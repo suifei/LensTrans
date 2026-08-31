@@ -420,8 +420,8 @@ bool RegionCapture::GrabPrintWindow(BgraFrame& out) {
     ReleaseDC(nullptr, screen);
     return false;
   }
-  const int ww = std::max(1, wr.right - wr.left);
-  const int wh = std::max(1, wr.bottom - wr.top);
+  const int ww = std::max(1, static_cast<int>(wr.right - wr.left));
+  const int wh = std::max(1, static_cast<int>(wr.bottom - wr.top));
   BITMAPINFO bi{};
   bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
   bi.bmiHeader.biWidth = ww;
