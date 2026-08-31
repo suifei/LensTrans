@@ -160,7 +160,7 @@ if(WIN32)
   )
   target_include_directories(lenstrans_wgc_probe PRIVATE "${CMAKE_SOURCE_DIR}")
   target_link_libraries(lenstrans_wgc_probe PRIVATE
-    lenstrans_core user32 gdi32 ole32 d3d11 dxgi windowsapp)
+    lenstrans_core user32 gdi32 ole32 dwmapi d3d11 dxgi windowsapp)
   target_compile_definitions(lenstrans_wgc_probe PRIVATE UNICODE _UNICODE NOMINMAX WINVER=0x0A00
                                                          _WIN32_WINNT=0x0A00)
   if(MSVC)
