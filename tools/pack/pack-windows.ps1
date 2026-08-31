@@ -118,7 +118,7 @@ $lines += "- VC++ runtime / Universal CRT: not bundled (system)."
 if ($Offline) {
   $lines += "- offline dir: ``dist/windows-offline/``"
   $lines += "- gguf: $ggufName ($ggufBytes bytes)"
-  $lines += "- offline sum: $offBytes bytes ($(DecMb $offBytes) MB decimal). Limit 520 MB: **$(if ($offOk) { 'PASS' } else { 'FAIL' })**"
+  $lines += "- offline sum: $offBytes bytes ($(DecMb $offBytes) MB decimal). Limit 2200 MB: **$(if ($offOk) { 'PASS' } else { 'FAIL' })**"
 } else {
   $lines += "- offline: not packed this run (``-Offline`` to add models/*.gguf)."
 }

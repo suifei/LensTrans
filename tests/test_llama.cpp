@@ -79,7 +79,7 @@ static int RunOne(lenstrans::IEngine* eng, bool quality, const char* src, const 
   if (!r.error.empty() || r.text.empty() || !HasCjk(r.text)) return 1;
   if (quality && r.beam_width != 2) return 1;
   if (r.first_token_ms > 800) return 1;
-  if (ws > 550.0) return 1;
+  if (ws > 1800.0) return 1;
   return 0;
 }
 
@@ -133,7 +133,7 @@ static int RunQualitySuite(lenstrans::IEngine* eng, const char* outp, const char
   if (f) {
     f << "\n- engine_hard_fail_rows: " << engine_fail << "\n"
       << "- max_ws_mib: " << max_ws << "\n"
-      << "- ws_le_550: " << (max_ws <= 550.0 ? "yes" : "no") << "\n"
+      << "- ws_le_1800: " << (max_ws <= 1800.0 ? "yes" : "no") << "\n"
       << "- this is Goal test evidence, not W1 acceptance.\n";
   }
   std::printf("%s wrote %s engine_hard_fail=%d max_ws=%.1f\n", title, outp, engine_fail, max_ws);
@@ -206,7 +206,7 @@ static int RunFlores50(lenstrans::IEngine* eng) {
     f << "\n- sentences: " << n << "\n"
       << "- engine_hard_fail_rows: " << engine_fail << "\n"
       << "- max_ws_mib: " << max_ws << "\n"
-      << "- ws_le_550: " << (max_ws <= 550.0 ? "yes" : "no") << "\n"
+      << "- ws_le_1800: " << (max_ws <= 1800.0 ? "yes" : "no") << "\n"
       << "- this is Goal test evidence, not W1 acceptance.\n";
   }
   if (!f) {

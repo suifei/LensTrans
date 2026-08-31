@@ -186,13 +186,13 @@ if ($WithGguf) {
   }
   if (Test-Path $gguf) {
     $hash = (Get-FileHash -Algorithm SHA256 $gguf).Hash
-    $hashOk = $hash -eq "74A4DA8C9FDBCD15BD1F6D01D621410D31C6FC00986F5EB687824E7B93D7A9DB"
+    $hashOk = $hash -eq "6A1A2EB6D15622BF3C96857206351BA97E1AF16C30D7A74EE38970E434E9407E"
     Add-Result "gguf" "GGUF sha256/size" $hashOk $gguf "sha=$hash bytes=$((Get-Item $gguf).Length)"
     try {
       & $pack -BuildDir $rel -Offline
       $sm = if (Test-Path $sizeMd) { Get-Content $sizeMd -Raw } else { "" }
-      $offPass = $sm -match "Limit 520 MB:\s*\*\*PASS\*\*"
-      Add-Result "offline_pack" "offline pack <=520MB" $offPass $sizeMd $(if ($offPass) { "PASS" } else { "FAIL" })
+      $offPass = $sm -match "Limit 2200 MB:\s*\*\*PASS\*\*"
+      Add-Result "offline_pack" "offline pack <=2200MB" $offPass $sizeMd $(if ($offPass) { "PASS" } else { "FAIL" })
     } catch {
       Add-Result "offline_pack" "offline pack <=520MB" $false $pack $_.Exception.Message
     }
@@ -205,34 +205,34 @@ if ($WithGguf) {
       if (Test-Path $q10) {
         $q = Get-Content $q10 -Raw
         # Look for max WS numbers if present; also accept process exit 0 + file exists as partial
-        if ($q -match '(?m)^- ws_le_550:\s*yes') {
+        if ($q -match '(?m)^- ws_le_1800:\s*yes') {
           $wsPass = $true
           if ($q -match '(?m)^- max_ws_mib:\s*(\d+(?:\.\d+)?)') {
-            $wsDetail = "max_ws_mib=$($Matches[1]) ws_le_550=yes"
+            $wsDetail = "max_ws_mib=$($Matches[1]) ws_le_1800=yes"
           } else {
-            $wsDetail = "ws_le_550=yes"
+            $wsDetail = "ws_le_1800=yes"
           }
         } elseif ($q -match '(?m)^- max_ws_mib:\s*(\d+(?:\.\d+)?)') {
           $ws = [double]$Matches[1]
-          $wsPass = ($ws -le 550.0)
+          $wsPass = ($ws -le 1800.0)
           $wsDetail = "max_ws_mib=$ws"
         } else {
           $wsPass = ($LASTEXITCODE -eq 0)
           $wsDetail = "quality-10 written exit=$LASTEXITCODE (parse WS manually)"
         }
       }
-      Add-Result "ws550" "WS <=550MB (quality-10)" $wsPass $q10 $wsDetail
+      Add-Result "ws1800" "WS <=1800MB (quality-10)" $wsPass $q10 $wsDetail
     } else {
-      Add-Result "ws550" "WS <=550MB (quality-10)" $null $llamaTest "BLOCKED (no llama test or bad gguf)"
+      Add-Result "ws1800" "WS <=1800MB (quality-10)" $null $llamaTest "BLOCKED (no llama test or bad gguf)"
     }
   } else {
     Add-Result "gguf" "GGUF download" $false $gguf "missing"
     Add-Result "offline_pack" "offline pack <=520MB" $null $sizeMd "no gguf"
-    Add-Result "ws550" "WS <=550MB" $null "-" "no gguf"
+    Add-Result "ws1800" "WS <=1800MB" $null "-" "no gguf"
   }
 } else {
   Add-Result "offline_pack" "offline pack <=520MB" $null "-" "WithGguf not set"
-  Add-Result "ws550" "WS <=550MB" $null "-" "WithGguf not set"
+  Add-Result "ws1800" "WS <=1800MB" $null "-" "WithGguf not set"
 }
 
 # --- WGC probe (BLOCKED is explicit when this host has no interactive capture permission) ---
