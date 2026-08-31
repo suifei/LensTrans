@@ -29,8 +29,12 @@ typedef struct LenstransCoreLayout {
     float width;
     float height;
     float font_px;
+    int font_weight;
     float line_height_px;
     float margin_px;
+    float text_inset_x;
+    float text_inset_y;
+    float corner_radius;
     float background_alpha;
     int mode;
     int covers_source;

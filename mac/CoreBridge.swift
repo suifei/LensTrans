@@ -14,7 +14,10 @@ enum MacCoreBridge {
     struct Layout {
         var rect: CGRect
         var fontSize: CGFloat
+        var fontWeight: Int
         var lineHeight: CGFloat
+        var textInset: CGSize
+        var cornerRadius: CGFloat
         var mode: MacPresentMode
         var coversSource: Bool
         var showSource: Bool
@@ -228,7 +231,11 @@ enum MacCoreBridge {
         return Layout(
             rect: CGRect(x: CGFloat(output.x), y: CGFloat(output.y),
                          width: CGFloat(output.width), height: CGFloat(output.height)),
-            fontSize: CGFloat(output.font_px), lineHeight: CGFloat(output.line_height_px),
+            fontSize: CGFloat(output.font_px), fontWeight: Int(output.font_weight),
+            lineHeight: CGFloat(output.line_height_px),
+            textInset: CGSize(width: CGFloat(output.text_inset_x),
+                              height: CGFloat(output.text_inset_y)),
+            cornerRadius: CGFloat(output.corner_radius),
             mode: mode, coversSource: output.covers_source != 0, showSource: output.show_source != 0,
             textColor: (CGFloat(output.text_red) / 255, CGFloat(output.text_green) / 255,
                         CGFloat(output.text_blue) / 255),

@@ -38,8 +38,12 @@ struct PresentBlockLayout {
   LayoutRect rect;
   std::vector<std::string> lines;
   float font_px = 0;
+  int font_weight = 400;
   float line_height_px = 0;
   float margin_px = 0;
+  float text_inset_x = 0;
+  float text_inset_y = 0;
+  float corner_radius = 0;
   float background_alpha = 1.0f;
   bool covers_source = true;
   bool show_source = false;
@@ -75,8 +79,9 @@ inline std::vector<PresentBlockLayout> BuildPresentLayout(const std::vector<Tran
     rect = ClampLayoutRect(rect, options.target_width, options.target_height);
     if (rect.w <= 0 || rect.h <= 0) continue;
 
+    const float source_line = std::max(source_h, std::max(1.0f, source.line_height * sy));
     const float estimate = std::max(options.min_font_px,
-                                    std::min(options.max_font_px, source_h * 0.82f * scale));
+                                    std::min(options.max_font_px, source_line * 0.82f * scale));
     const int columns = std::max(options.min_columns,
                                  static_cast<int>((rect.w - margin * 2.0f) / std::max(4.0f, estimate * 0.72f)));
     PresentBlockLayout layout;
@@ -90,9 +95,13 @@ inline std::vector<PresentBlockLayout> BuildPresentLayout(const std::vector<Tran
     const float available_h = std::max(1.0f, rect.h - margin * 2.0f);
     const float fit_font = available_h / (line_count * options.line_height_ratio);
     layout.font_px = std::max(options.min_font_px, std::min(options.max_font_px, std::min(estimate, fit_font)));
+    layout.font_weight = 400;
     layout.line_height_px = std::max(layout.font_px, std::min(available_h / line_count,
                                                                layout.font_px * options.line_height_ratio));
     layout.margin_px = margin;
+    layout.text_inset_x = std::max(2.0f, std::min(5.0f, margin * 1.5f));
+    layout.text_inset_y = std::max(1.0f, std::min(3.0f, margin));
+    layout.corner_radius = std::max(1.0f, std::min(2.0f, rect.h * 0.12f));
     layout.fill_color = source.background;
     layout.text_color = AccessibleTextColor(layout.fill_color);
     const PresentPlan plan = PlanPresent(source, options.presentation.contrast, options.presentation.lock,

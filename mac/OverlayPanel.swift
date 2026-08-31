@@ -138,7 +138,9 @@ final class OverlayPanel: NSPanel {
             MacPresent.paint(mode: block.mode, text: block.text, source: block.source,
                              fill: block.fill, textColor: block.textColor,
                              stickerAlpha: block.stickerAlpha, in: rect, ctx: ctx,
-                             maxFont: block.fontSize > 0 ? block.fontSize : nil)
+                             maxFont: block.fontSize > 0 ? block.fontSize : nil,
+                             fontWeight: block.fontWeight, textInset: block.textInset,
+                             cornerRadius: block.cornerRadius)
             accepted.append(rect)
         }
         presentLayer.contents = ctx.makeImage()

@@ -240,7 +240,8 @@ final class OverlayWatchSession {
                                        green: layout.textColor.green,
                                        blue: layout.textColor.blue, alpha: 1),
                     stickerAlpha: CGFloat(store.stickerAlpha) / 100,
-                    fontSize: layout.fontSize
+                    fontSize: layout.fontSize, fontWeight: layout.fontWeight,
+                    textInset: layout.textInset, cornerRadius: layout.cornerRadius
                 ))
                 panel.applyPresent(blocks: plans)
                 RuntimeLog.info("present.blocks=\(plans.count) rect=\(layout.rect) mode=\(layout.mode)")

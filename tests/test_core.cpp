@@ -556,6 +556,10 @@ int main() {
         CHECK(layout.rect.y + layout.rect.h <= options.target_height);
         CHECK(layout.rect.w > 0 && layout.rect.h > 0);
         CHECK(layout.covers_source && layout.background_alpha >= 0.60f);
+        CHECK(layout.font_weight == 400);
+        CHECK(layout.font_px >= 8 && layout.line_height_px >= layout.font_px);
+        CHECK(layout.text_inset_x >= 2 && layout.text_inset_y >= 1);
+        CHECK(layout.corner_radius >= 1 && layout.corner_radius <= 2);
       }
       CHECK(second.layout[1].mode == PresentMode::Sticker);
     }

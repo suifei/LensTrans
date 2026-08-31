@@ -194,6 +194,22 @@ void BlendRect(uint32_t* px, int stride, int x0, int y0, int x1, int y1, int w, 
   FillRectPx(px, stride, x0, y0, x1, y1, w, h, Premul(a, red, green, blue));
 }
 
+void BlendRoundedRect(uint32_t* px, int stride, int x0, int y0, int x1, int y1,
+                      int w, int h, int radius, uint8_t a,
+                      uint8_t red, uint8_t green, uint8_t blue) {
+  radius = std::max(0, std::min(radius, std::min((x1 - x0) / 2, (y1 - y0) / 2)));
+  const uint32_t color = Premul(a, red, green, blue);
+  for (int y = std::max(0, y0); y < std::min(h, y1); ++y) {
+    for (int x = std::max(0, x0); x < std::min(w, x1); ++x) {
+      const int dx = x < x0 + radius ? x0 + radius - x
+                    : x >= x1 - radius ? x - (x1 - radius - 1) : 0;
+      const int dy = y < y0 + radius ? y0 + radius - y
+                    : y >= y1 - radius ? y - (y1 - radius - 1) : 0;
+      if (dx == 0 || dy == 0 || dx * dx + dy * dy <= radius * radius) px[y * stride + x] = color;
+    }
+  }
+}
+
 void ScalePremultipliedAlpha(uint32_t* px, std::size_t count, float alpha) {
   const float scale = std::max(0.0f, std::min(1.0f, alpha));
   if (scale >= 0.999f) return;
@@ -385,7 +401,7 @@ void DrawUtf8(HDC hdc, int x, int y, int w, int h, const std::string& utf8, COLO
 }
 
 void DrawUtf8Fit(HDC hdc, int x, int y, int w, int h, const std::string& utf8, COLORREF color,
-                 int preferred_px) {
+                 int preferred_px, int font_weight = 400) {
   if (utf8.empty() || w <= 2 || h <= 2) return;
   const int n = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()), nullptr, 0);
   if (n <= 0) return;
@@ -395,7 +411,7 @@ void DrawUtf8Fit(HDC hdc, int x, int y, int w, int h, const std::string& utf8, C
   HFONT chosen = nullptr;
   int chosen_px = 8;
   for (int px = upper; px >= 8; --px) {
-    HFONT f = CreateFontW(-px, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+    HFONT f = CreateFontW(-px, 0, 0, 0, font_weight, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                           OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                           DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
     if (!f) continue;
@@ -412,7 +428,7 @@ void DrawUtf8Fit(HDC hdc, int x, int y, int w, int h, const std::string& utf8, C
     DeleteObject(f);
   }
   if (!chosen) {
-    chosen = CreateFontW(-chosen_px, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+    chosen = CreateFontW(-chosen_px, 0, 0, 0, font_weight, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                          OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                          DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
   }
@@ -422,7 +438,12 @@ void DrawUtf8Fit(HDC hdc, int x, int y, int w, int h, const std::string& utf8, C
   SetBkMode(hdc, TRANSPARENT);
   SetTextColor(hdc, color);
   IntersectClipRect(hdc, x, y, x + w, y + h);
-  RECT rc{x, y, x + w, y + h};
+  RECT measured{x, y, x + w, y + h};
+  DrawTextW(hdc, ws.c_str(), n, &measured,
+            DT_LEFT | DT_WORDBREAK | DT_NOPREFIX | DT_EDITCONTROL | DT_CALCRECT);
+  const int text_h = measured.bottom - measured.top;
+  const int draw_y = y + std::max(0, (h - text_h) / 2);
+  RECT rc{x, draw_y, x + w, y + h};
   DrawTextW(hdc, ws.c_str(), n, &rc,
             DT_LEFT | DT_WORDBREAK | DT_NOPREFIX | DT_EDITCONTROL);
   SelectObject(hdc, old);
@@ -540,8 +561,9 @@ void PaintBox(OverlayBox* box) {
     const int target_h = contrast ? std::max(8, bh * 2 / 3) : bh;
     const uint8_t fill_alpha = static_cast<uint8_t>(std::round(
         std::max(0.0f, std::min(1.0f, p.background_alpha)) * 255.0f));
-    BlendRect(px, w, x, y, x + bw, y + bh, w, h, fill_alpha,
-              static_cast<uint8_t>(br), static_cast<uint8_t>(bg), static_cast<uint8_t>(bb));
+    BlendRoundedRect(px, w, x, y, x + bw, y + bh, w, h,
+                     static_cast<int>(std::round(p.corner_radius)), fill_alpha,
+                     static_cast<uint8_t>(br), static_cast<uint8_t>(bg), static_cast<uint8_t>(bb));
     const auto text_color = lenstrans::AccessibleTextColor(p.source.background);
     const int tr = text_color.r, tg = text_color.g, tb = text_color.b;
     std::string joined;
@@ -549,11 +571,14 @@ void PaintBox(OverlayBox* box) {
       if (i) joined += '\n';
       joined += p.lines[i];
     }
-    DrawUtf8Fit(mem, x + 4, y + 2, bw - 8, target_h - 4, joined, RGB(tr, tg, tb),
-                static_cast<int>(std::round(p.font_px)));
+    const int inset_x = static_cast<int>(std::round(p.text_inset_x));
+    const int inset_y = static_cast<int>(std::round(p.text_inset_y));
+    DrawUtf8Fit(mem, x + inset_x, y + inset_y, bw - inset_x * 2,
+                target_h - inset_y * 2, joined, RGB(tr, tg, tb),
+                static_cast<int>(std::round(p.font_px)), p.font_weight);
     if (contrast) {
       DrawUtf8Fit(mem, x + 4, y + target_h, bw - 8, bh - target_h - 2, p.source.text,
-                  RGB(200, 200, 200), std::max(8, static_cast<int>(p.font_px * 0.55f)));
+                  RGB(200, 200, 200), std::max(8, static_cast<int>(p.font_px * 0.55f)), 400);
     }
     FixAlpha(px, w, h, x, y, x + bw, y + bh);
   };

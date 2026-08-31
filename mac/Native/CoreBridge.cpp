@@ -297,8 +297,12 @@ extern "C" int lenstrans_core_layout_block(const LenstransCoreBlock *input, cons
     out->width = layout.rect.w;
     out->height = layout.rect.h;
     out->font_px = layout.font_px;
+    out->font_weight = layout.font_weight;
     out->line_height_px = layout.line_height_px;
     out->margin_px = layout.margin_px;
+    out->text_inset_x = layout.text_inset_x;
+    out->text_inset_y = layout.text_inset_y;
+    out->corner_radius = layout.corner_radius;
     out->background_alpha = layout.background_alpha;
     out->mode = layout.mode == lenstrans::PresentMode::StickerContrast
                     ? LT_PRESENT_STICKER_CONTRAST
