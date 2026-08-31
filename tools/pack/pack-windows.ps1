@@ -31,7 +31,7 @@ if (-not (Test-Path $overlayPath)) {
     $BuildDir = $releaseDir
     $overlayPath = Join-Path $BuildDir "lenstrans_overlay.exe"
   } else {
-    throw "missing overlay in $BuildDir or $releaseDir — build Release first"
+    throw "missing overlay in $BuildDir or $releaseDir; build Release first"
   }
 }
 
