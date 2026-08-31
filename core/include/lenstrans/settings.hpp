@@ -74,6 +74,24 @@ inline Settings ParseSettings(const std::string& text) {
   Settings s;
   std::istringstream in(text);
   std::string line;
+  auto parse_int = [](const std::string& value, int fallback) {
+    try {
+      std::size_t used = 0;
+      const int parsed = std::stoi(value, &used);
+      return used == value.size() ? parsed : fallback;
+    } catch (...) {
+      return fallback;
+    }
+  };
+  auto parse_float = [](const std::string& value, float fallback) {
+    try {
+      std::size_t used = 0;
+      const float parsed = std::stof(value, &used);
+      return used == value.size() ? parsed : fallback;
+    } catch (...) {
+      return fallback;
+    }
+  };
   auto eq = [](const std::string& k, const std::string& key) { return k == key; };
   while (std::getline(in, line)) {
     const auto p = line.find('=');
@@ -96,13 +114,13 @@ inline Settings ParseSettings(const std::string& text) {
       s.render = v == "sticker" ? RenderLock::Sticker : v == "immersive" ? RenderLock::Immersive
                                                                         : RenderLock::Auto;
     } else if (eq(k, "sticker_alpha")) {
-      s.sticker_alpha = std::max(60, std::min(100, std::stoi(v)));
+      s.sticker_alpha = std::max(60, std::min(100, parse_int(v, s.sticker_alpha)));
     } else if (eq(k, "contrast")) {
       s.contrast = v == "1";
     } else if (eq(k, "font_scale")) {
-      s.font_scale = std::max(80, std::min(150, std::stoi(v)));
+      s.font_scale = std::max(80, std::min(150, parse_int(v, s.font_scale)));
     } else if (eq(k, "overlay_alpha")) {
-      s.overlay_alpha = std::max(0.005f, std::min(0.10f, std::stof(v)));
+      s.overlay_alpha = std::max(0.005f, std::min(0.10f, parse_float(v, s.overlay_alpha)));
     } else if (eq(k, "restore_boxes")) {
       s.restore_boxes = v == "1";
     } else if (eq(k, "autostart")) {
@@ -116,25 +134,25 @@ inline Settings ParseSettings(const std::string& text) {
     } else if (eq(k, "model_path")) {
       s.model_path = v;
     } else if (eq(k, "vk_new")) {
-      s.vk_new = std::stoi(v);
+      s.vk_new = parse_int(v, s.vk_new);
     } else if (eq(k, "mod_new")) {
-      s.mod_new = std::stoi(v);
+      s.mod_new = parse_int(v, s.mod_new);
     } else if (eq(k, "vk_edit")) {
-      s.vk_edit = std::stoi(v);
+      s.vk_edit = parse_int(v, s.vk_edit);
     } else if (eq(k, "mod_edit")) {
-      s.mod_edit = std::stoi(v);
+      s.mod_edit = parse_int(v, s.mod_edit);
     } else if (eq(k, "vk_pause")) {
-      s.vk_pause = std::stoi(v);
+      s.vk_pause = parse_int(v, s.vk_pause);
     } else if (eq(k, "mod_pause")) {
-      s.mod_pause = std::stoi(v);
+      s.mod_pause = parse_int(v, s.mod_pause);
     } else if (eq(k, "vk_hide")) {
-      s.vk_hide = std::stoi(v);
+      s.vk_hide = parse_int(v, s.vk_hide);
     } else if (eq(k, "mod_hide")) {
-      s.mod_hide = std::stoi(v);
+      s.mod_hide = parse_int(v, s.mod_hide);
     } else if (eq(k, "vk_settings")) {
-      s.vk_settings = std::stoi(v);
+      s.vk_settings = parse_int(v, s.vk_settings);
     } else if (eq(k, "mod_settings")) {
-      s.mod_settings = std::stoi(v);
+      s.mod_settings = parse_int(v, s.mod_settings);
     }
   }
   return s;

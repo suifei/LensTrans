@@ -5,6 +5,8 @@
 namespace lenstrans::win {
 
 std::string ConfigDir();
+std::string ConfigPath(const char* file_name);
+bool WriteConfigFile(const char* file_name, const std::string& body);
 bool ProtectToFile(const std::string& path, const std::string& plain);
 bool UnprotectFromFile(const std::string& path, std::string& plain);
 void SetAutostart(bool on);

@@ -111,7 +111,7 @@ def main() -> int:
         rows.append(("swift test LensTransLogic", "yes", "pass" if code == 0 else "fail",
                      f"exit={code}; " + ("7 tests" if "Executed 7 tests" in out or "passed" in out.lower() else out[-300:])))
     else:
-        rows.append(("swift test LensTransLogic", "yes", "skip", "swift not on PATH"))
+        rows.append(("swift test LensTransLogic", "yes", "blocked", "swift not on PATH"))
 
     # mac unimplemented inventory exists and lists remaining gaps
     unimp = (ROOT / "mac/UNIMPLEMENTED.md").read_text(encoding="utf-8")

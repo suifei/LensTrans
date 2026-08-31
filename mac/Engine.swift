@@ -6,14 +6,14 @@ import LlamaBridge
 // CLI (llama-completion) is fallback when in-process link/load fails.
 // No default gateway / no prefilled host / key / model.
 
-struct MacTranslateRequest {
+struct MacTranslateRequest: Sendable {
     var text: String
     var srcLang: String = "auto"
     var tgtLang: String = "zh"
     var quality: Bool = false
 }
 
-struct MacTranslateResult {
+struct MacTranslateResult: Sendable {
     var text: String = ""
     var error: String = ""
     var firstTokenMs: Int = 0
@@ -92,8 +92,11 @@ final class MacLocalEngine: MacEngine {
             r.error = "local model missing"
             return r
         }
-        let prompt = LocalPromptLogic.buildTranslatePrompt(
-            text: req.text, tgtLang: req.tgtLang)
+        guard let prompt = MacCoreBridge.prompt(text: req.text, sourceLanguage: req.srcLang,
+                                                targetLanguage: req.tgtLang) else {
+            r.error = "core prompt build failed"
+            return r
+        }
         let maxNew = req.quality ? 96 : 48
 
         // 1) Prefer in-process Metal.
@@ -278,7 +281,12 @@ final class MacCloudEngine: MacEngine {
             acc = Self.parseChatCompletion(text)
             if acc.isEmpty { err = "empty cloud output" }
         }.resume()
-        _ = sem.wait(timeout: .now() + 35)
+        if sem.wait(timeout: .now() + 35) == .timedOut {
+            r.error = "cloud request timeout"
+            r.latencyMs = Int(Date().timeIntervalSince(t0) * 1000)
+            r.backend = "cloud"
+            return r
+        }
         r.text = acc
         r.error = err
         r.latencyMs = Int(Date().timeIntervalSince(t0) * 1000)
@@ -293,12 +301,10 @@ final class MacCloudEngine: MacEngine {
 }
 
 enum MacEngineRouter {
-    enum Kind { case none, local, cloud }
+    typealias Kind = MacCoreBridge.EngineKind
     static func route(pref: String, privacy: Bool, chars: Int, localOk: Bool, cloudOk: Bool) -> Kind {
-        switch EngineRouteLogic.route(pref: pref, privacy: privacy, chars: chars, localOk: localOk, cloudOk: cloudOk) {
-        case .none: return .none
-        case .local: return .local
-        case .cloud: return .cloud
-        }
+        return MacCoreBridge.route(preference: pref, privacy: privacy,
+                                   textCharacters: chars, localReady: localOk,
+                                   cloudReady: cloudOk)
     }
 }

@@ -17,6 +17,7 @@ final class SettingsStore {
     var contrast = false
     var render = "auto"
     var stickerAlpha = 92
+    var fontScale = 100
     var cloudBaseURL = ""
     var cloudModel = ""
     var modelPath = ""
@@ -53,6 +54,7 @@ final class SettingsStore {
             case "contrast": contrast = v == "1"
             case "render": render = v
             case "sticker_alpha": stickerAlpha = Int(v) ?? 92
+            case "font_scale": fontScale = Int(v) ?? 100
             case "cloud_base_url": cloudBaseURL = v
             case "cloud_model": cloudModel = v
             case "model_path": modelPath = v
@@ -72,6 +74,7 @@ final class SettingsStore {
         contrast=\(contrast ? 1 : 0)
         render=\(render)
         sticker_alpha=\(stickerAlpha)
+        font_scale=\(fontScale)
         cloud_base_url=\(cloudBaseURL)
         cloud_model=\(cloudModel)
         model_path=\(modelPath)

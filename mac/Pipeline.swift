@@ -9,10 +9,11 @@ final class OverlayWatchSession {
     private weak var panel: OverlayPanel?
     private var capture = OverlayCapture()
     private var timer: Timer?
-    private var lastSourceKey = ""
+    private var lastLayoutKey = ""
     private var emptySince: Date?
     private var running = false
     private var tickBusy = false
+    private var startupTask: Task<Void, Never>?
 
     init(panel: OverlayPanel) {
         self.panel = panel
@@ -22,8 +23,22 @@ final class OverlayWatchSession {
         guard !running else { return }
         running = true
         emptySince = nil
-        lastSourceKey = ""
+        lastLayoutKey = ""
         timer?.invalidate()
+        startupTask?.cancel()
+        // Start capture first, then process the first frame immediately. This avoids the
+        // initial timer racing SCStream startup and leaving a box idle until pause/resume.
+        startupTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.ensureCapture()
+            guard !Task.isCancelled, self.running else { return }
+            await self.tick()
+            self.installTimer()
+        }
+    }
+
+    private func installTimer() {
+        guard running, timer == nil else { return }
         timer = Timer.scheduledTimer(withTimeInterval: 0.45, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 await self?.tick()
@@ -36,10 +51,24 @@ final class OverlayWatchSession {
 
     func stop() {
         running = false
+        startupTask?.cancel()
+        startupTask = nil
         timer?.invalidate()
         timer = nil
         capture.stop()
         tickBusy = false
+    }
+
+    private func ensureCapture() async {
+        guard running, let panel else { return }
+        let region = Self.captureRegion(for: panel)
+        let displayID = Self.displayID(for: panel.screen)
+        let exclude = [CGWindowID(panel.windowNumber)]
+        do {
+            try await capture.start(region: region, displayID: displayID, excludingWindowIDs: exclude)
+        } catch {
+            capture.lastError = error.localizedDescription
+        }
     }
 
     private func tick() async {
@@ -49,10 +78,17 @@ final class OverlayWatchSession {
         defer { tickBusy = false }
 
         let region = Self.captureRegion(for: panel)
+        let displayID = Self.displayID(for: panel.screen)
         do {
-            try await capture.start(region: region)
-            // Allow one frame to land.
-            try await Task.sleep(nanoseconds: 80_000_000)
+            // Reuse long-lived stream; only update ROI (no startCapture per tick).
+            if capture.isRunning {
+                try await capture.updateRegion(region, displayID: displayID)
+            } else {
+                try await capture.start(
+                    region: region, displayID: displayID,
+                    excludingWindowIDs: [CGWindowID(panel.windowNumber)]
+                )
+            }
             let frame = try await capture.grab()
             let blocks = try MacOcr.recognize(bgra: frame.bgra, width: frame.width, height: frame.height)
             if blocks.isEmpty {
@@ -61,69 +97,107 @@ final class OverlayWatchSession {
                 let emptyMs = Int((now.timeIntervalSince(emptySince ?? now)) * 1000)
                 let alpha = MacPresent.fadeAlpha(hasText: false, emptyMs: emptyMs)
                 if alpha <= 0.05 {
-                    panel.presentLayer.contents = nil
-                    if panel.mode == .translating { panel.enterWatching() }
+                    panel.clearPresent()
+                    if panel.mode == .translating { panel.mode = .watching }
                 }
                 return
             }
             emptySince = nil
 
-            // Prefer the largest block (main line) for MVP overlay paint.
-            let block = blocks.max(by: { ($0.w * $0.h) < ($1.w * $1.h) })!
-            let source = block.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !source.isEmpty else { return }
-            let key = source.lowercased()
-            if key == lastSourceKey, panel.mode == .translating { return }
-
+            let visibleBlocks = blocks
+                .filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                .sorted { lhs, rhs in
+                    if abs(lhs.y - rhs.y) > 4 { return lhs.y < rhs.y }
+                    return lhs.x < rhs.x
+                }
+            guard !visibleBlocks.isEmpty else { return }
             let store = SettingsStore.shared
             let modelPath = MacPaths.resolveModelPath()
+            let cloudKey = MacSecrets.loadCloudKey()
             let local = MacLocalEngine(modelPath: modelPath)
-            let cloud = MacCloudEngine(
-                baseURL: store.cloudBaseURL,
-                apiKey: MacSecrets.loadCloudKey(),
-                model: store.cloudModel
-            )
+            let cloud = MacCloudEngine(baseURL: store.cloudBaseURL, apiKey: cloudKey,
+                                       model: store.cloudModel)
             let kind = MacEngineRouter.route(
                 pref: store.engine.isEmpty ? TrayController.shared.enginePref : store.engine,
                 privacy: false,
-                chars: source.count,
+                chars: visibleBlocks.reduce(0) { $0 + $1.text.count },
                 localOk: local.ready,
                 cloudOk: cloud.ready
             )
-            let req = MacTranslateRequest(
-                text: source,
-                srcLang: "auto",
-                tgtLang: store.tgtLang.isEmpty ? TrayController.shared.targetLang : store.tgtLang,
-                quality: store.quality
-            )
-            let result: MacTranslateResult
-            switch kind {
-            case .local: result = local.translate(req)
-            case .cloud: result = cloud.translate(req)
-            case .none:
-                result = MacTranslateResult(text: "", error: "no engine ready", firstTokenMs: 0,
-                                            latencyMs: 0, beamWidth: 1, fromCache: false)
-            }
-            local.maybeIdleUnload(idleMs: ModelMetaLogic.idleUnloadMs)
-
-            let text = result.error.isEmpty ? result.text : "[\(result.error)]"
-            guard !text.isEmpty else { return }
-            lastSourceKey = key
-
             let contrast = store.contrast || TrayController.shared.contrastMode
-            let mode = MacPresent.decide(bgVariance: block.bgVariance, contrast: contrast, lock: store.render)
-            let fill = NSColor(calibratedRed: CGFloat(block.r) / 255,
-                               green: CGFloat(block.g) / 255,
-                               blue: CGFloat(block.b) / 255, alpha: 1)
-            let textColor: NSColor = (Int(block.r) + Int(block.g) + Int(block.b)) > 380
-                ? .black : .white
-            let sticker = CGFloat(store.stickerAlpha) / 100
-            panel.applyPresent(mode: mode, text: text, source: contrast ? source : nil,
-                               fill: fill, textColor: textColor, stickerAlpha: sticker)
+            let target = store.tgtLang.isEmpty ? TrayController.shared.targetLang : store.tgtLang
+            let layoutKey = visibleBlocks.map {
+                "\($0.text.lowercased())@\(Int($0.x)),\(Int($0.y)),\(Int($0.w)),\(Int($0.h))"
+            }.joined(separator: "|") +
+                "|cfg:\(target)|\(store.quality)|\(store.render)|\(contrast)|\(store.fontScale)"
+            if layoutKey == lastLayoutKey, panel.mode == .translating { return }
+
+            // Keep the UI actor free while OCR results are translated. The worker creates one
+            // engine per tick so model access remains serialized inside that task.
+            let requests = visibleBlocks.map {
+                MacTranslateRequest(text: $0.text.trimmingCharacters(in: .whitespacesAndNewlines),
+                                     srcLang: "auto", tgtLang: target, quality: store.quality)
+            }
+            let translated = await Self.translateInBackground(
+                requests: requests, kind: kind, modelPath: modelPath,
+                cliPath: MacPaths.findLlamaCli(), cloudBaseURL: store.cloudBaseURL,
+                cloudKey: cloudKey, cloudModel: store.cloudModel)
+            var plans: [MacPresentBlock] = []
+            for (index, block) in visibleBlocks.prefix(16).enumerated() {
+                let source = requests[index].text
+                let cacheKey = "\(target)|\(source.lowercased())|\(store.quality)"
+                let text = TranslationCacheStore.shared.get(cacheKey) ?? translated[index].text
+                guard !text.isEmpty, translated[index].error.isEmpty ||
+                        TranslationCacheStore.shared.get(cacheKey) != nil else { continue }
+                if TranslationCacheStore.shared.get(cacheKey) == nil {
+                    TranslationCacheStore.shared.put(cacheKey, text)
+                }
+                guard let layout = MacCoreBridge.layout(
+                    block: block, translation: text,
+                    frameSize: CGSize(width: frame.width, height: frame.height),
+                    targetSize: panel.frame.size, contrast: contrast,
+                    render: store.render, stickerAlpha: store.stickerAlpha,
+                    fontScale: store.fontScale) else { continue }
+                plans.append(MacPresentBlock(
+                    rect: layout.rect, mode: layout.mode, text: text,
+                    source: layout.showSource ? source : nil,
+                    fill: NSColor(calibratedRed: layout.fillColor.red,
+                                  green: layout.fillColor.green,
+                                  blue: layout.fillColor.blue, alpha: 1),
+                    textColor: NSColor(calibratedRed: layout.textColor.red,
+                                       green: layout.textColor.green,
+                                       blue: layout.textColor.blue, alpha: 1),
+                    stickerAlpha: CGFloat(store.stickerAlpha) / 100,
+                    fontSize: layout.fontSize
+                ))
+                panel.applyPresent(blocks: plans)
+            }
+            guard !plans.isEmpty else { return }
+            lastLayoutKey = layoutKey
         } catch {
             // Permission / no-frame: keep watching; do not crash the app.
             capture.lastError = error.localizedDescription
         }
+    }
+
+    private static func translateInBackground(
+        requests: [MacTranslateRequest], kind: MacEngineRouter.Kind, modelPath: String,
+        cliPath: String?, cloudBaseURL: String, cloudKey: String, cloudModel: String
+    ) async -> [MacTranslateResult] {
+        await Task.detached(priority: .userInitiated) {
+            let local = MacLocalEngine(modelPath: modelPath, cliPath: cliPath)
+            let cloud = MacCloudEngine(baseURL: cloudBaseURL, apiKey: cloudKey, model: cloudModel)
+            let results = requests.map { request -> MacTranslateResult in
+                switch kind {
+                case .local: return local.translate(request)
+                case .cloud: return cloud.translate(request)
+                case .none:
+                    return MacTranslateResult(text: "", error: "no engine ready")
+                }
+            }
+            local.maybeIdleUnload(idleMs: ModelMetaLogic.idleUnloadMs)
+            return results
+        }.value
     }
 
     /// NSPanel frame (bottom-left) → display-relative top-left crop for ScreenCaptureKit.
@@ -138,6 +212,23 @@ final class OverlayWatchSession {
             width: frame.width,
             height: frame.height
         )
+    }
+
+    static func presentRect(for block: MacOcrBlock, frameWidth: Int, frameHeight: Int,
+                            panelSize: CGSize) -> CGRect {
+        guard frameWidth > 0, frameHeight > 0 else { return .zero }
+        let sx = panelSize.width / CGFloat(frameWidth)
+        let sy = panelSize.height / CGFloat(frameHeight)
+        let pad = max(1, min(3, CGFloat(block.h) * sy * 0.12))
+        return CGRect(x: CGFloat(block.x) * sx - pad,
+                      y: CGFloat(block.y) * sy - pad,
+                      width: CGFloat(block.w) * sx + pad * 2,
+                      height: CGFloat(block.h) * sy + pad * 2)
+    }
+
+    private static func displayID(for screen: NSScreen?) -> CGDirectDisplayID? {
+        guard let screen else { return nil }
+        return screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
     }
 }
 

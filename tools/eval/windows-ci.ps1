@@ -223,7 +223,7 @@ if ($WithGguf) {
       }
       Add-Result "ws550" "WS <=550MB (quality-10)" $wsPass $q10 $wsDetail
     } else {
-      Add-Result "ws550" "WS <=550MB (quality-10)" $null $llamaTest "skipped (no llama test or bad gguf)"
+      Add-Result "ws550" "WS <=550MB (quality-10)" $null $llamaTest "BLOCKED (no llama test or bad gguf)"
     }
   } else {
     Add-Result "gguf" "GGUF download" $false $gguf "missing"
@@ -235,15 +235,15 @@ if ($WithGguf) {
   Add-Result "ws550" "WS <=550MB" $null "-" "WithGguf not set"
 }
 
-# --- best-effort WGC probe (often fails headless) ---
+# --- WGC probe (BLOCKED is explicit when this host has no interactive capture permission) ---
 $wgc = Join-Path $rel "lenstrans_wgc_probe.exe"
 if (Test-Path $wgc) {
   $p = Start-Process -FilePath $wgc -PassThru -NoNewWindow -Wait
   $wgcMd = Join-Path $OutDir "wgc-probe.md"
   $ok = ($p.ExitCode -eq 0)
-  Add-Result "wgc_probe" "wgc_probe (may fail headless)" $(if ($ok) { $true } else { $null }) $wgcMd "exit=$($p.ExitCode)"
+  Add-Result "wgc_probe" "wgc_probe" $(if ($ok) { $true } else { $null }) $wgcMd $(if ($ok) { "exit=$($p.ExitCode)" } else { "BLOCKED: exit=$($p.ExitCode) (interactive desktop/capture permission required)" })
 } else {
-  Add-Result "wgc_probe" "wgc_probe" $null "-" "not built"
+  Add-Result "wgc_probe" "wgc_probe" $null "-" "BLOCKED: not built"
 }
 
 $lines = @(
@@ -258,11 +258,11 @@ $lines = @(
   "| --- | --- | --- | --- |"
 )
 foreach ($r in $Results) {
-  $p = if ($null -eq $r.pass) { "skip" } elseif ($r.pass) { "PASS" } else { "FAIL" }
+  $p = if ($null -eq $r.pass) { "BLOCKED" } elseif ($r.pass) { "PASS" } else { "FAIL" }
   $lines += "| $($r.name) | $p | ``$($r.evidence)`` | $($r.detail) |"
 }
 $lines += ""
-$lines += "- gui_mvp_auto: **not run** (needs interactive desktop: overlay-e2e / click-through / hotkey-probe)"
+$lines += "- gui_mvp_auto: **BLOCKED** (needs interactive desktop: overlay-e2e / click-through / hotkey-probe)"
 $lines += "- script_hard_fail_count: $fail"
 $utf8 = New-Object System.Text.UTF8Encoding $false
 [System.IO.File]::WriteAllLines($Report, $lines, $utf8)

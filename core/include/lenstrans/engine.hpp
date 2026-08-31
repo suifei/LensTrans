@@ -1,6 +1,7 @@
 #pragma once
 
 #include "lenstrans/model_meta.hpp"
+#include "lenstrans/present.hpp"
 #include "lenstrans/router.hpp"
 
 #include <cstdint>
@@ -14,6 +15,7 @@ struct TranslateRequest {
   std::string src_lang = "auto";
   std::string tgt_lang = "zh";
   bool quality = false;
+  PresentationSemantics presentation{};
 };
 
 struct TranslateResult {

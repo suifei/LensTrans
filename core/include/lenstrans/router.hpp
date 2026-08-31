@@ -1,5 +1,7 @@
 #pragma once
 
+#include "lenstrans/text.hpp"
+
 #include <cstddef>
 
 namespace lenstrans {
@@ -31,6 +33,11 @@ inline EngineKind RouteEngine(const RouteInput& in) {
   if (in.local_ready) return EngineKind::Local;
   if (in.cloud_ready) return EngineKind::Cloud;
   return EngineKind::None;
+}
+
+inline EngineKind RouteEngineForText(EnginePref pref, bool privacy, const std::string& text,
+                                     bool local_ready, bool cloud_ready) {
+  return RouteEngine({pref, privacy, Utf8CodepointCount(text), local_ready, cloud_ready});
 }
 
 }  // namespace lenstrans

@@ -1,15 +1,121 @@
 #pragma once
 
+#include "lenstrans/cache.hpp"
+#include "lenstrans/engine.hpp"
 #include "lenstrans/ocr_block.hpp"
+#include "lenstrans/present_layout.hpp"
+#include "lenstrans/settings.hpp"
+#include "lenstrans/translation.hpp"
 
+#include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace lenstrans {
 
 enum class BoxState { Hidden, Editing, Watching, Translating, Paused };
+
+class CancellationToken {
+ public:
+  CancellationToken() : cancelled_(std::make_shared<std::atomic_bool>(false)) {}
+  void Cancel() const { cancelled_->store(true, std::memory_order_relaxed); }
+  bool IsCancelled() const { return cancelled_->load(std::memory_order_relaxed); }
+
+ private:
+  std::shared_ptr<std::atomic_bool> cancelled_;
+};
+
+struct CapturedFrame {
+  int width = 0;
+  int height = 0;
+  int stride_bytes = 0;
+  std::uint64_t sequence = 0;
+  std::vector<std::uint8_t> bgra;
+  bool IsValid() const { return width > 0 && height > 0; }
+};
+
+class ICaptureProvider {
+ public:
+  virtual ~ICaptureProvider() = default;
+  virtual bool Capture(CapturedFrame& frame, const CancellationToken& token) = 0;
+};
+
+class IOcrProvider {
+ public:
+  virtual ~IOcrProvider() = default;
+  virtual bool Recognize(const CapturedFrame& frame, const CancellationToken& token,
+                         std::vector<OcrBlock>& blocks) = 0;
+};
+
+struct PresentationFrame {
+  int width = 0;
+  int height = 0;
+  std::vector<TranslatedBlock> blocks;
+  std::vector<PresentBlockLayout> layout;
+};
+
+class IPresentationSink {
+ public:
+  virtual ~IPresentationSink() = default;
+  virtual bool Present(const PresentationFrame& frame, const CancellationToken& token) = 0;
+};
+
+enum class PipelineState { Idle, Capturing, Recognizing, Watching, Translating, Presenting, Paused,
+                          Cancelled, Failed };
+
+struct PipelineServices {
+  ICaptureProvider* capture = nullptr;
+  IOcrProvider* ocr = nullptr;
+  IPresentationSink* presenter = nullptr;
+  IEngine* local = nullptr;
+  IEngine* cloud = nullptr;
+  TranslationCache* cache = nullptr;
+};
+
+struct PipelineOptions {
+  Settings settings;
+  int target_width = 0;
+  int target_height = 0;
+  OcrMergeOptions merge{};
+};
+
+struct PipelineResult {
+  PipelineState state = PipelineState::Idle;
+  bool stabilized = false;
+  bool rendered = false;
+  bool cancelled = false;
+  std::string error;
+  CapturedFrame frame;
+  std::vector<TranslatedBlock> blocks;
+  std::vector<PresentBlockLayout> layout;
+};
+
+class Pipeline final {
+ public:
+  Pipeline(PipelineServices services, PipelineOptions options = {});
+  Pipeline(const Pipeline&) = delete;
+  Pipeline& operator=(const Pipeline&) = delete;
+
+  // One cooperative, synchronous state-machine step. Each instance is independent and reusable.
+  PipelineResult Step();
+  void Cancel();
+  void Pause();
+  void Resume();
+  void Reset();
+  PipelineState state() const { return state_; }
+
+ private:
+  PipelineServices services_;
+  PipelineOptions options_;
+  PipelineState state_ = PipelineState::Idle;
+  CancellationToken token_;
+  std::vector<OcrBlock> previous_;
+  bool has_previous_ = false;
+};
 
 inline bool SameBlock(const OcrBlock& a, const OcrBlock& b, float px_tol = 2.0f) {
   if (a.text != b.text) return false;

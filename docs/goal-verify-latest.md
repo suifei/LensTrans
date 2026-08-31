@@ -1,8 +1,8 @@
 # Goal verify (PRD v0.2)
 
-- date: 2026-08-30T16:31:38Z
-- host: Linux 6.12.94+
-- root: `/workspace`
+- date: 2026-08-30T19:58:23Z
+- host: Darwin 25.5.0
+- root: `/Users/suifei/works/LensTrans/lenstrans`
 
 | item | auto | status | evidence |
 | --- | --- | --- | --- |
@@ -12,7 +12,7 @@
 | lenstrans_test (cache/route/present/cloud) | yes | **pass** | test_core: all checks passed |
 | mac-logic-verify.py | yes | **pass** | tools/eval/mac-logic-verify.py |
 | swift test LensTransLogic | yes | **pass** | exit=0; 7 tests |
-| macOS 接口+未实现清单 | doc | **pass** | mac/UNIMPLEMENTED.md |
+| macOS 接口+未实现清单 | doc | **fail** | mac/UNIMPLEMENTED.md |
 | WGC capture e2e | yes | **blocked** | requires Windows host + Release build |
 | OCR WinRT e2e | yes | **blocked** | requires Windows host + Release build |
 | overlay transparent/click-through | yes | **blocked** | requires Windows host + Release build |

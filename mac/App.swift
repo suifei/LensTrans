@@ -28,7 +28,12 @@ struct LensTransMacApp {
         HotkeyCenter.shared.onNewBox = { _ = OverlayBoxStore.shared.createBox() }
         HotkeyCenter.shared.onEditToggle = {
             for p in OverlayBoxStore.shared.panels {
-                if p.mode == .watching { p.enterEditing() } else { p.enterWatching() }
+                switch p.mode {
+                case .watching, .translating, .paused:
+                    p.enterEditing()
+                case .editing, .hidden:
+                    p.enterWatching()
+                }
             }
         }
         HotkeyCenter.shared.onPause = { OverlayBoxStore.shared.pauseAll() }

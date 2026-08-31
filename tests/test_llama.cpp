@@ -176,6 +176,8 @@ static int RunFlores50(lenstrans::IEngine* eng) {
     return o;
   };
   std::ofstream f(outp.c_str(), std::ios::binary);
+  if (f) {
+    f << "# FLORES-50 greedy EN-ZH (not W1)\n\n"
       << "- model: qwen2.5-0.5b-instruct-q4_k_m.gguf\n"
       << "- source: FLORES-200 dev eng_Latn / zho_Hans (first " << n << " lines)\n"
       << "- beam: 1 (greedy)\n"
@@ -191,7 +193,7 @@ static int RunFlores50(lenstrans::IEngine* eng) {
     std::string line;
     const int e = RunOne(eng, false, en[static_cast<size_t>(i)].c_str(), "q", line, ws, &r);
     if (ws > max_ws) max_ws = ws;
-    if (e && (r.error.size() || r.text.empty())) ++engine_fail;
+    if (e != 0) ++engine_fail;
     const std::string ref = i < static_cast<int>(refs.size()) ? refs[static_cast<size_t>(i)] : "";
     if (f) {
       f << "| " << (i + 1) << " | " << WordCount(en[static_cast<size_t>(i)].c_str()) << " | "
@@ -207,7 +209,11 @@ static int RunFlores50(lenstrans::IEngine* eng) {
       << "- ws_le_550: " << (max_ws <= 550.0 ? "yes" : "no") << "\n"
       << "- this is Goal test evidence, not W1 acceptance.\n";
   }
-  std::printf("flores50 wrote %s sentences=%d engine_hard_fail=%d max_ws=%.1f\n", outp, n,
+  if (!f) {
+    std::fprintf(stderr, "flores50: unable to write %s\n", outp.c_str());
+    return 1;
+  }
+  std::printf("flores50 wrote %s sentences=%d engine_hard_fail=%d max_ws=%.1f\n", outp.c_str(), n,
               engine_fail, max_ws);
   return engine_fail ? 1 : 0;
 }

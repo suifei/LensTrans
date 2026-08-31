@@ -20,6 +20,7 @@ let logicTargets: [Target] = [
 
 var llamaCxxSettings: [CXXSetting] = [
     .unsafeFlags(["-std=c++17"]),
+    .unsafeFlags(["-I\(packageDir)/../core/include"]),
 ]
 var llamaLinkerSettings: [LinkerSetting] = []
 var appLinkerSettings: [LinkerSetting] = [
@@ -87,6 +88,7 @@ let package = Package(
             sources: [
                 "App.swift",
                 "Capture.swift",
+                "CoreBridge.swift",
                 "E2e.swift",
                 "Engine.swift",
                 "Hotkeys.swift",

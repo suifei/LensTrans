@@ -5,7 +5,7 @@ import CoreGraphics
 // Vision → MacOcrBlock. Fields align with lenstrans::OcrBlock
 // (text / bbox / line_height / color / bg_variance).
 
-struct MacOcrBlock {
+struct MacOcrBlock: Sendable {
     var text: String
     var x: Float
     var y: Float
@@ -77,14 +77,19 @@ enum MacOcr {
     private static func sampleColors(bgra: Data, width: Int, height: Int,
                                      x: Int, y: Int, w: Int, h: Int)
         -> (r: UInt8, g: UInt8, b: UInt8, var: Float) {
-        let x0 = max(0, x), y0 = max(0, y)
-        let x1 = min(width, x + max(1, w)), y1 = min(height, y + max(1, h))
+        let margin = max(2, min(8, h / 3))
+        let x0 = max(0, x - margin), y0 = max(0, y - margin)
+        let x1 = min(width, x + max(1, w) + margin)
+        let y1 = min(height, y + max(1, h) + margin)
         var sumR = 0, sumG = 0, sumB = 0, n = 0
         var sumSq: Float = 0
         bgra.withUnsafeBytes { raw in
             guard let p = raw.bindMemory(to: UInt8.self).baseAddress else { return }
             for yy in y0..<y1 {
                 for xx in x0..<x1 {
+                    // Sample the ring around glyphs so the replacement uses the source
+                    // background, not an average polluted by the text color.
+                    if xx >= x, xx < x + w, yy >= y, yy < y + h { continue }
                     let o = (yy * width + xx) * 4
                     let b = Int(p[o]), g = Int(p[o + 1]), r = Int(p[o + 2])
                     sumR += r; sumG += g; sumB += b

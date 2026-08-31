@@ -16,7 +16,7 @@ function Add-Result($id, $name, $pass, $evidence, $detail) {
   [void]$script:Results.Add([pscustomobject]@{ id=$id; name=$name; pass=$pass; evidence=$evidence; detail=$detail })
 }
 
-function Add-SkipResult($id, $name, $evidence, $detail) {
+function Add-BlockedResult($id, $name, $evidence, $detail) {
   Add-Result $id $name $null $evidence $detail
 }
 
@@ -82,8 +82,8 @@ function Invoke-ClickThroughEval {
     return 1
   }
   if ($sendInputUnits -eq 0) {
-    Add-SkipResult "click_through" "click-through 15s" $outMd `
-      "skip: SendInput blocked (0 units); hit_test=target — verify on interactive desktop"
+    Add-BlockedResult "click_through" "click-through 15s" $outMd `
+      "BLOCKED: SendInput injected 0 units; hit_test=target — interactive desktop input is required"
     return 0
   }
   Add-Result "click_through" "click-through 15s" $false $outMd "exit=$code ${elapsed}s"
@@ -121,8 +121,8 @@ $fail += Invoke-EvalScript "hotkey_probe" "hotkey-probe 15s" (Join-Path $Root "t
 $fail += Invoke-EvalScript "idle_wake" "idle-wake 25s" (Join-Path $Root "tools\eval\idle-wake.ps1") @{
   WatchdogSec = 25 }
 
-Add-SkipResult "hotkey_ctrl_e" "hotkey-ctrl-e SendInput" "hotkey-ctrl-e.md" `
-  "skip: RegisterHotKey ignores SendInput per Win32; use hotkey-probe.md"
+Add-BlockedResult "hotkey_ctrl_e" "hotkey-ctrl-e SendInput" "hotkey-ctrl-e.md" `
+  "BLOCKED: RegisterHotKey ignores SendInput per Win32; use hotkey-probe.md"
 
 if ($OverlaySec -gt $OverlayBudgetSec) {
   Add-Result "overlay_budget" "overlay budget" $false "${OverlaySec}s" "exceeded ${OverlayBudgetSec}s"
@@ -153,7 +153,7 @@ try {
     Add-Result "offline_pack" "offline pack 520MB" $offPass $sizeMd $(if ($offPass) { "PASS" } else { "FAIL" })
     if (-not $offPass) { $fail += 1 }
   } else {
-    Add-Result "offline_pack" "offline pack 520MB" $null $sizeMd "no gguf"
+    Add-BlockedResult "offline_pack" "offline pack 520MB" $sizeMd "BLOCKED: GGUF missing"
   }
 } catch {
   Add-Result "base_pack" "base pack 30MB" $false $packScript $_.Exception.Message
@@ -165,7 +165,7 @@ $llamaScript = Join-Path $Root "tools\eval\overlay-llama-e2e.ps1"
 if (-not $SkipLlama -and (Test-Path $modelPath) -and (Test-Path $llamaScript)) {
   $fail += Invoke-EvalScript "overlay_llama" "overlay-llama optional" $llamaScript @{ E2eSec=35; TimeoutSec=45 }
 } else {
-  Add-Result "overlay_llama" "overlay-llama optional" $null "overlay-llama-e2e.md" "skipped"
+  Add-BlockedResult "overlay_llama" "overlay-llama" "overlay-llama-e2e.md" "BLOCKED: GGUF or llama E2E prerequisite missing"
 }
 
 $testPass = ($Results | Where-Object id -eq "test_core").pass
@@ -223,7 +223,7 @@ $lines = @(
   "| --- | --- | --- | --- |"
 )
 foreach ($r in $Results) {
-  $p = if ($null -eq $r.pass) { "skip" } elseif ($r.pass) { "PASS" } else { "FAIL" }
+  $p = if ($null -eq $r.pass) { "BLOCKED" } elseif ($r.pass) { "PASS" } else { "FAIL" }
   $lines += "| $($r.name) | $p | ``$($r.evidence)`` | $($r.detail) |"
 }
 $lines += ""

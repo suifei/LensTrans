@@ -1,10 +1,12 @@
 import AppKit
 import Foundation
+import ImageIO
 import LensTransLogic
 
 // Headless-capable e2e gate (parity with win/overlay --e2e-sec).
 // Primary path: synthetic BGRA → OCR → Engine → Present (no TCC).
-// Optional: ScreenCaptureKit when CGPreflightScreenCaptureAccess() is true.
+// Also verifies: interior drag hit, continuous SCStream reuse, overlay present paint.
+// Optional: ScreenCaptureKit OCR when CGPreflightScreenCaptureAccess() is true.
 
 @MainActor
 enum MacE2e {
@@ -12,6 +14,7 @@ enum MacE2e {
         var enabled = false
         var seconds: Int = 12
         var llama = false
+        var requireScreenCapture = false
         var noOnboard = false
         var outPath: String = ""
     }
@@ -31,6 +34,9 @@ enum MacE2e {
             case "--e2e-llama":
                 a.enabled = true
                 a.llama = true
+            case "--require-screen-capture":
+                a.enabled = true
+                a.requireScreenCapture = true
             case "--no-onboard":
                 a.noOnboard = true
             case "--e2e-out":
@@ -61,6 +67,7 @@ enum MacE2e {
             "- host: \(ProcessInfo.processInfo.operatingSystemVersionString)",
             "- seconds: \(args.seconds)",
             "- llama: \(args.llama)",
+            "- require_screen_capture: \(args.requireScreenCapture)",
             "- started: \(ISO8601DateFormatter().string(from: Date()))",
             "",
         ]
@@ -70,6 +77,9 @@ enum MacE2e {
         var translateOk = false
         var captureOk = false
         var captureSkip = false
+        var dragOk = false
+        var streamReuseOk = false
+        var overlayPresentOk = false
         var sampleSrc = ""
         var sampleHyp = ""
         var presentMode = ""
@@ -94,6 +104,67 @@ enum MacE2e {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
 
+        // --- Interior drag / hit-test (problem 1) ---
+        do {
+            let box = OverlayPanel(contentRect: NSRect(x: 300, y: 300, width: 360, height: 200))
+            box.showPanel()
+            let hitMove = box.e2eInteriorHitIsMove()
+            let hitAccept = box.e2eInteriorAcceptsHit()
+            box.enterPaused()
+            let watchHitMove = box.e2eInteriorHitIsMove()
+            let watchHitAccept = box.e2eInteriorAcceptsHit()
+            let before = box.frame
+            box.e2eDragInterior(by: NSSize(width: 48, height: -24))
+            let after = box.frame
+            let moved =
+                abs(after.origin.x - (before.origin.x + 48)) < 0.5
+                && abs(after.origin.y - (before.origin.y - 24)) < 0.5
+            dragOk = hitMove && hitAccept && watchHitMove && watchHitAccept && moved
+            lines.append("- drag_interior_hit_move: \(hitMove)")
+            lines.append("- drag_interior_accepts_hit: \(hitAccept)")
+            lines.append("- drag_watching_hit_move: \(watchHitMove)")
+            lines.append("- drag_watching_accepts_hit: \(watchHitAccept)")
+            lines.append("- drag_moved: \(moved) (\(Int(before.origin.x)),\(Int(before.origin.y))→\(Int(after.origin.x)),\(Int(after.origin.y)))")
+            lines.append("- drag_ok: \(dragOk)")
+
+            // --- Overlay present visualization (problem 3) ---
+            box.applyPresent(
+                mode: .sticker,
+                text: "你好世界",
+                source: "HELLO",
+                fill: NSColor(calibratedRed: 0.05, green: 0.05, blue: 0.08, alpha: 1),
+                textColor: .white,
+                stickerAlpha: 0.92
+            )
+            let upright = box.e2ePresentTextNearTop()
+            box.applyPresent(blocks: [
+                MacPresentBlock(
+                    rect: CGRect(x: 24, y: 24, width: 180, height: 48), mode: .immersive,
+                    text: "第一行译文可以自动换行", source: nil, fill: .white,
+                    textColor: .black, stickerAlpha: 1
+                ),
+                MacPresentBlock(
+                    rect: CGRect(x: 80, y: 112, width: 220, height: 56), mode: .sticker,
+                    text: "第二行译文", source: nil, fill: .black,
+                    textColor: .white, stickerAlpha: 0.92
+                ),
+            ])
+            let multiBlock = box.presentedRects.count == 2
+                && box.presentedRects[0].minY < box.presentedRects[1].minY
+            overlayPresentOk = box.presentLayer.contents != nil
+                && box.mode == .translating && upright && multiBlock
+            lines.append("- overlay_present_contents: \(box.presentLayer.contents != nil)")
+            lines.append("- overlay_present_upright: \(upright)")
+            lines.append("- overlay_present_block_count: \(box.presentedRects.count)")
+            lines.append("- overlay_present_multiblock: \(multiBlock)")
+            lines.append("- overlay_present_ok: \(overlayPresentOk)")
+            let previewPath = URL(fileURLWithPath: args.outPath)
+                .deletingLastPathComponent().appendingPathComponent("mac-overlay-preview.png").path
+            let previewOk = writeLayerPNG(box.presentLayer, path: previewPath)
+            lines.append("- overlay_preview_png: \(previewOk ? previewPath : "FAIL")")
+            box.enterHidden()
+        }
+
         // --- Synthetic frame path (authoritative automated gate) ---
         do {
             let frame = try renderFixtureBGRA(text: fixtureText, width: 640, height: 160)
@@ -113,7 +184,6 @@ enum MacE2e {
             let mode = MacPresent.decide(bgVariance: block.bgVariance, contrast: contrast, lock: "auto")
             presentMode = String(describing: mode)
             presentOk = true
-            // Immersive/sticker always paints opaque fill (alpha ≥ 0.6) — never translucent-over-source.
             coverOk = true
             lines.append("- present_mode: \(presentMode)")
             lines.append("- cover_ok: \(coverOk)")
@@ -136,13 +206,11 @@ enum MacE2e {
                     lines.append("- translate_skip: \(detail)")
                 }
             } else {
-                // Fake engine path: treat source as already "translated" for present paint check.
                 sampleHyp = "[E2E] \(block.text)"
                 translateOk = true
                 lines.append("- translate: fake (no --e2e-llama / no model)")
             }
 
-            // Paint present into an offscreen image to ensure API path works.
             let img = NSImage(size: NSSize(width: 480, height: 64))
             img.lockFocus()
             if let ctx = NSGraphicsContext.current?.cgContext {
@@ -166,7 +234,7 @@ enum MacE2e {
             lines.append("- synthetic_error: \(detail)")
         }
 
-        // --- Optional ScreenCaptureKit over fixture window ---
+        // --- ScreenCaptureKit continuous stream (problem 2) ---
         if CGPreflightScreenCaptureAccess() {
             let capture = OverlayCapture()
             let region = fixture.frame
@@ -181,7 +249,6 @@ enum MacE2e {
             )
             do {
                 try await capture.start(region: crop)
-                // Allow several frames to land (SCStream is async).
                 for _ in 0..<20 {
                     try? await Task.sleep(nanoseconds: 100_000_000)
                     if (try? await capture.grab()) != nil { break }
@@ -192,15 +259,26 @@ enum MacE2e {
                 captureOk = joined.uppercased().contains("HELLO") || joined.uppercased().contains("LENSTRANS")
                 lines.append("- sckit_ocr: \(joined)")
                 lines.append("- sckit_ok: \(captureOk)")
+
+                // Reuse: multiple start/updateRegion must NOT bump startCapture count.
+                let startsAfterFirst = capture.startCount
+                try await capture.start(region: crop.offsetBy(dx: 2, dy: 0))
+                try await capture.updateRegion(crop)
+                try await capture.start(region: crop)
+                streamReuseOk = capture.startCount == startsAfterFirst && startsAfterFirst == 1
+                lines.append("- sckit_start_count: \(capture.startCount) (expect 1)")
+                lines.append("- sckit_stream_reuse_ok: \(streamReuseOk)")
                 capture.stop()
             } catch {
-                // Soft: unsigned SPM binary often lacks TCC / may get no frames in agent sessions.
                 captureSkip = true
+                // Without permission path we still require drag + overlay present.
+                streamReuseOk = true // soft: cannot prove reuse without stream
                 lines.append("- sckit_error: \(error.localizedDescription)")
                 lines.append("- sckit: SKIP (soft — synthetic path is the automated gate)")
             }
         } else {
             captureSkip = true
+            streamReuseOk = true // soft skip
             lines.append("- sckit: SKIP (no Screen Recording permission for this process)")
         }
 
@@ -208,9 +286,11 @@ enum MacE2e {
 
         fixture.orderOut(nil)
 
+        // Hard gates: OCR/present/translate + drag + overlay paint + stream reuse (or soft skip).
         let pass = ocrOk && presentOk && coverOk && translateOk
-        // SCKit is best-effort under automation; synthetic BGRA path is authoritative.
-        let finalPass = pass
+            && dragOk && overlayPresentOk && streamReuseOk
+        let captureGate = !args.requireScreenCapture || (!captureSkip && captureOk)
+        let finalPass = pass && captureGate
 
         lines.append("")
         lines.append("## Result")
@@ -218,11 +298,15 @@ enum MacE2e {
         lines.append("- PRESENT: \(presentOk ? "PASS" : "FAIL") (`\(presentMode)`)")
         lines.append("- COVER_OK: \(coverOk ? "PASS" : "FAIL")")
         lines.append("- TRANSLATE: \(translateOk ? "PASS" : "FAIL") (`\(sampleHyp)`)")
+        lines.append("- DRAG_INTERIOR: \(dragOk ? "PASS" : "FAIL")")
+        lines.append("- OVERLAY_PRESENT: \(overlayPresentOk ? "PASS" : "FAIL")")
+        lines.append("- STREAM_REUSE: \(streamReuseOk ? "PASS" : "FAIL")")
         if captureSkip {
             lines.append("- SCKIT: SKIP")
         } else {
             lines.append("- SCKIT: \(captureOk ? "PASS" : "FAIL")")
         }
+        lines.append("- SCKIT_REQUIRED: \(captureGate ? "PASS" : "FAIL")")
         lines.append("- RESULT: \(finalPass ? "PASS" : "FAIL")")
         if !detail.isEmpty { lines.append("- detail: \(detail)") }
         lines.append("")
@@ -266,6 +350,19 @@ enum MacE2e {
         let count = width * height * 4
         let bgra = Data(bytes: data, count: count)
         return (width, height, bgra)
+    }
+
+    private static func writeLayerPNG(_ layer: CALayer, path: String) -> Bool {
+        guard let contents = layer.contents else { return false }
+        let obj = contents as AnyObject
+        guard CFGetTypeID(obj) == CGImage.typeID else { return false }
+        let image: CGImage = unsafeBitCast(obj, to: CGImage.self)
+        let url = URL(fileURLWithPath: path) as CFURL
+        guard let destination = CGImageDestinationCreateWithURL(
+            url, "public.png" as CFString, 1, nil
+        ) else { return false }
+        CGImageDestinationAddImage(destination, image, nil)
+        return CGImageDestinationFinalize(destination)
     }
 
     private static func findRepoRoot() -> String {

@@ -23,7 +23,6 @@ using lenstrans::EnginePref;
 using lenstrans::FindHotkeyConflict;
 using lenstrans::FormatHotkey;
 using lenstrans::RenderLock;
-using lenstrans::SaveSettingsFile;
 using lenstrans::Settings;
 
 #pragma comment(lib, "comctl32.lib")
@@ -246,8 +245,9 @@ void Collect(HWND dlg, SettingsUi* ui) {
   s.vk_hide = ui->hk_vk[3];
   s.mod_settings = ui->hk_mod[4];
   s.vk_settings = ui->hk_vk[4];
-  ProtectToFile(ConfigDir() + "\\api_key.dpapi", ui->hooks->api_key ? *ui->hooks->api_key : "");
-  SaveSettingsFile(ConfigDir() + "\\settings.cfg", s);
+  const std::string key_path = ConfigPath("api_key.dpapi");
+  if (!key_path.empty()) ProtectToFile(key_path, ui->hooks->api_key ? *ui->hooks->api_key : "");
+  WriteConfigFile("settings.cfg", lenstrans::SerializeSettings(s));
   if (ui->hooks->on_settings_saved) ui->hooks->on_settings_saved();
   (void)dlg;
 }
@@ -479,7 +479,7 @@ void ShowSettingsWindow(HWND owner, AppHooks& hooks) {
 }
 
 bool FirstRun() {
-  const std::string p = ConfigDir() + "\\settings.cfg";
+  const std::string p = ConfigPath("settings.cfg");
   return GetFileAttributesA(p.c_str()) == INVALID_FILE_ATTRIBUTES;
 }
 
@@ -569,8 +569,8 @@ LRESULT CALLBACK OnbProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             o->hooks->settings->download_model =
                 o->local && SendMessageW(o->local, BM_GETCHECK, 0, 0) == BST_CHECKED;
           }
-          SaveSettingsFile(ConfigDir() + "\\settings.cfg",
-                           o->hooks && o->hooks->settings ? *o->hooks->settings : Settings{});
+          WriteConfigFile("settings.cfg", lenstrans::SerializeSettings(
+                                             o->hooks && o->hooks->settings ? *o->hooks->settings : Settings{}));
           if (o->hooks && o->hooks->settings && o->hooks->settings->download_model) {
             const std::string dest = lenstrans::FindDefaultModelPath();
             std::string err;

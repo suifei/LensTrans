@@ -171,7 +171,10 @@ RegionCapture::RegionCapture() = default;
 RegionCapture::~RegionCapture() { Stop(); }
 
 bool RegionCapture::Start(HWND overlay, RECT screen_phys, HWND wgc_target) {
-  Stop();
+  std::lock_guard<std::mutex> lock(mu_);
+  StopLocked();
+  err_.clear();
+  wgc_failed_ = false;
   overlay_ = overlay;
   rect_ = screen_phys;
   impl_ = new Impl();
@@ -217,7 +220,12 @@ bool RegionCapture::Start(HWND overlay, RECT screen_phys, HWND wgc_target) {
         impl_->monitor = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
       }
       MONITORINFO mi{sizeof(mi)};
-      GetMonitorInfoW(impl_->monitor, &mi);
+      if (!impl_->monitor || !GetMonitorInfoW(impl_->monitor, &mi)) {
+        err_ = "monitor lookup failed";
+        delete impl_;
+        impl_ = nullptr;
+        return false;
+      }
       impl_->monitor_rect = mi.rcMonitor;
     }
     if (impl_->capture_window) {
@@ -234,11 +242,9 @@ bool RegionCapture::Start(HWND overlay, RECT screen_phys, HWND wgc_target) {
         impl_->device, DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, sz);
     impl_->session = impl_->pool.CreateCaptureSession(impl_->item);
     impl_->session.IsCursorCaptureEnabled(false);
-    if (impl_->capture_window) {
-      ExcludeOverlayFromCapture(overlay_);
-    } else if (overlay_) {
-      SetWindowDisplayAffinity(overlay_, 0);
-    }
+    // Keep the affinity exclusion in place for both capture modes. The monitor
+    // exclusion-list API is a second line of defense on newer Windows builds.
+    if (overlay_) ExcludeOverlayFromCapture(overlay_);
     impl_->session.StartCapture();
     if (!impl_->capture_window && overlay_) {
       ApplyMonitorOverlayExclusion(impl_->session, overlay_);
@@ -254,9 +260,12 @@ bool RegionCapture::Start(HWND overlay, RECT screen_phys, HWND wgc_target) {
   return true;
 }
 
-void RegionCapture::UpdateRect(RECT screen_phys) { rect_ = screen_phys; }
+void RegionCapture::UpdateRect(RECT screen_phys) {
+  std::lock_guard<std::mutex> lock(mu_);
+  rect_ = screen_phys;
+}
 
-void RegionCapture::Stop() {
+void RegionCapture::StopLocked() {
   if (!impl_) return;
   try {
     if (impl_->session) impl_->session.Close();
@@ -267,8 +276,13 @@ void RegionCapture::Stop() {
   impl_ = nullptr;
 }
 
+void RegionCapture::Stop() {
+  std::lock_guard<std::mutex> lock(mu_);
+  StopLocked();
+}
+
 bool RegionCapture::GrabWgc(BgraFrame& out) {
-  if (!impl_ || !impl_->pool) return false;
+  if (wgc_failed_ || !impl_ || !impl_->pool) return false;
   winrt::Windows::Graphics::Capture::Direct3D11CaptureFrame frame{nullptr};
   try {
     frame = impl_->pool.TryGetNextFrame();
@@ -351,6 +365,10 @@ bool RegionCapture::GrabBitBlt(BgraFrame& out) {
   HDC screen = GetDC(nullptr);
   if (!screen) return false;
   HDC mem = CreateCompatibleDC(screen);
+  if (!mem) {
+    ReleaseDC(nullptr, screen);
+    return false;
+  }
   BITMAPINFO bi{};
   bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
   bi.bmiHeader.biWidth = w;
@@ -360,6 +378,12 @@ bool RegionCapture::GrabBitBlt(BgraFrame& out) {
   bi.bmiHeader.biCompression = BI_RGB;
   void* bits = nullptr;
   HBITMAP dib = CreateDIBSection(screen, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+  if (!dib || !bits) {
+    if (dib) DeleteObject(dib);
+    DeleteDC(mem);
+    ReleaseDC(nullptr, screen);
+    return false;
+  }
   HGDIOBJ old = SelectObject(mem, dib);
   const BOOL ok = BitBlt(mem, 0, 0, w, h, screen, rect_.left, rect_.top, SRCCOPY);
   if (ok && bits) {
@@ -384,50 +408,56 @@ bool RegionCapture::GrabPrintWindow(BgraFrame& out) {
   const int h = rect_.bottom - rect_.top;
   if (w <= 0 || h <= 0) return false;
   HDC screen = GetDC(nullptr);
+  if (!screen) return false;
   HDC mem = CreateCompatibleDC(screen);
+  if (!mem) {
+    ReleaseDC(nullptr, screen);
+    return false;
+  }
+  RECT wr{};
+  if (!GetWindowRect(target, &wr)) {
+    DeleteDC(mem);
+    ReleaseDC(nullptr, screen);
+    return false;
+  }
+  const int ww = std::max(1, wr.right - wr.left);
+  const int wh = std::max(1, wr.bottom - wr.top);
   BITMAPINFO bi{};
   bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-  bi.bmiHeader.biWidth = w;
-  bi.bmiHeader.biHeight = -h;
+  bi.bmiHeader.biWidth = ww;
+  bi.bmiHeader.biHeight = -wh;
   bi.bmiHeader.biPlanes = 1;
   bi.bmiHeader.biBitCount = 32;
   bi.bmiHeader.biCompression = BI_RGB;
   void* bits = nullptr;
   HBITMAP dib = CreateDIBSection(screen, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+  if (!dib || !bits) {
+    if (dib) DeleteObject(dib);
+    DeleteDC(mem);
+    ReleaseDC(nullptr, screen);
+    return false;
+  }
   HGDIOBJ old = SelectObject(mem, dib);
-  RECT wr{};
-  GetWindowRect(target, &wr);
   const int ox = rect_.left - wr.left;
   const int oy = rect_.top - wr.top;
-  HDC wnd = GetWindowDC(target);
   BOOL ok = PrintWindow(target, mem, PW_RENDERFULLCONTENT);
   if (!ok) ok = PrintWindow(target, mem, 0);
-  if (ok && bits && (ox != 0 || oy != 0 || wr.right - wr.left != w || wr.bottom - wr.top != h)) {
-    // PrintWindow dumped the whole window; crop by BitBlt from a full-window DIB.
-    const int ww = wr.right - wr.left;
-    const int wh = wr.bottom - wr.top;
-    BITMAPINFO bi2 = bi;
-    bi2.bmiHeader.biWidth = ww;
-    bi2.bmiHeader.biHeight = -wh;
-    void* bits2 = nullptr;
-    HDC mem2 = CreateCompatibleDC(screen);
-    HBITMAP dib2 = CreateDIBSection(screen, &bi2, DIB_RGB_COLORS, &bits2, nullptr, 0);
-    HGDIOBJ old2 = SelectObject(mem2, dib2);
-    BOOL ok2 = PrintWindow(target, mem2, PW_RENDERFULLCONTENT);
-    if (!ok2) ok2 = PrintWindow(target, mem2, 0);
-    if (ok2 && bits2) {
-      BitBlt(mem, 0, 0, w, h, mem2, ox, oy, SRCCOPY);
-    }
-    SelectObject(mem2, old2);
-    DeleteObject(dib2);
-    DeleteDC(mem2);
-  }
-  ReleaseDC(target, wnd);
   if (ok && bits) {
     out.w = w;
     out.h = h;
-    out.bgra.resize(static_cast<std::size_t>(w) * h * 4);
-    std::memcpy(out.bgra.data(), bits, out.bgra.size());
+    out.bgra.assign(static_cast<std::size_t>(w) * h * 4, 0);
+    const auto* src = static_cast<const std::uint8_t*>(bits);
+    for (int y = 0; y < h; ++y) {
+      const int sy = oy + y;
+      if (sy < 0 || sy >= wh) continue;
+      const int src_x = std::max(0, ox);
+      const int dst_x = std::max(0, -ox);
+      const int copy_w = std::min(w - dst_x, ww - src_x);
+      if (copy_w <= 0) continue;
+      std::memcpy(out.bgra.data() + static_cast<std::size_t>(y) * w * 4 + dst_x * 4,
+                  src + static_cast<std::size_t>(sy) * ww * 4 + src_x * 4,
+                  static_cast<std::size_t>(copy_w) * 4);
+    }
     out.source = "printwindow";
   }
   SelectObject(mem, old);
@@ -438,6 +468,7 @@ bool RegionCapture::GrabPrintWindow(BgraFrame& out) {
 }
 
 bool RegionCapture::GrabWgcOnly(BgraFrame& out) {
+  std::lock_guard<std::mutex> lock(mu_);
   out = {};
   if (GrabWgc(out)) return true;
   if (!impl_)
@@ -448,37 +479,41 @@ bool RegionCapture::GrabWgcOnly(BgraFrame& out) {
 }
 
 bool RegionCapture::Grab(BgraFrame& out) {
+  std::lock_guard<std::mutex> lock(mu_);
   out = {};
-  const bool monitor_wgc = impl_ && !impl_->capture_window;
-  const int max_attempts = monitor_wgc ? 40 : 6;
-  for (int attempt = 0; attempt < max_attempts; ++attempt) {
+  // WGC can need a few compositor ticks after StartCapture. Keep this short so a
+  // broken WGC session reaches the explicit GDI fallback instead of stalling the UI.
+  constexpr int kMaxAttempts = 4;
+  for (int attempt = 0; attempt < kMaxAttempts && !wgc_failed_; ++attempt) {
     if (!GrabWgc(out)) {
       out = {};
-      if (impl_ && attempt + 1 < max_attempts) Sleep(50);
+      if (impl_ && attempt + 1 < kMaxAttempts) Sleep(50);
       continue;
     }
-    if (!monitor_wgc && FrameIsCaptureHole(out)) {
+    if (FrameIsCaptureHole(out) && !FrameHasInk(out)) {
       out = {};
-      if (impl_ && attempt + 1 < max_attempts) Sleep(50);
+      if (impl_ && attempt + 1 < kMaxAttempts) Sleep(50);
       continue;
     }
-    if (monitor_wgc && FrameIsCaptureHole(out) && !FrameHasInk(out)) {
-      out = {};
-      if (impl_ && attempt + 1 < max_attempts) Sleep(50);
-      continue;
-    }
-    if (monitor_wgc) out.source = "wgc";
     return true;
   }
-  if (monitor_wgc) {
-    err_ = "WGC monitor frame empty";
-    return false;
+  if (impl_) wgc_failed_ = true;
+  const std::string wgc_error = impl_ ? "WGC frame unavailable" : "WGC not started";
+  if (GrabPrintWindow(out)) {
+    err_ = wgc_error + "; fallback=printwindow";
+    return true;
   }
-  err_ = impl_ ? "WGC frame empty, fallback" : "WGC not started";
-  if (GrabBitBlt(out)) return true;
-  if (GrabPrintWindow(out)) return true;
-  err_ = "all capture paths failed";
+  if (GrabBitBlt(out)) {
+    err_ = wgc_error + "; fallback=bitblt";
+    return true;
+  }
+  err_ = wgc_error + "; fallback=failed";
   return false;
+}
+
+std::string RegionCapture::LastError() const {
+  std::lock_guard<std::mutex> lock(mu_);
+  return err_;
 }
 
 }  // namespace lenstrans::win

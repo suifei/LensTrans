@@ -69,6 +69,7 @@ add_library(lenstrans_core STATIC
   core/src/engine_local.cpp
   core/src/engine_cloud.cpp
   core/src/engine_fake.cpp
+  core/src/pipeline.cpp
 )
 target_include_directories(lenstrans_core PUBLIC "${CMAKE_SOURCE_DIR}/core/include")
 if(WIN32)

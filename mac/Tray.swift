@@ -83,15 +83,15 @@ final class TrayController: NSObject {
         if let onPause { onPause() } else { OverlayBoxStore.shared.pauseAll() }
     }
 
-    @objc private func engLocal() { enginePref = "local"; SettingsStore.shared.engine = "local" }
-    @objc private func engCloud() { enginePref = "cloud"; SettingsStore.shared.engine = "cloud" }
-    @objc private func engAuto() { enginePref = "auto"; SettingsStore.shared.engine = "auto" }
-    @objc private func langZh() { targetLang = "zh"; SettingsStore.shared.tgtLang = "zh" }
-    @objc private func langEn() { targetLang = "en"; SettingsStore.shared.tgtLang = "en" }
-    @objc private func langJa() { targetLang = "ja"; SettingsStore.shared.tgtLang = "ja" }
-    @objc private func langKo() { targetLang = "ko"; SettingsStore.shared.tgtLang = "ko" }
-    @objc private func modeTrans() { contrastMode = false; SettingsStore.shared.contrast = false }
-    @objc private func modeContrast() { contrastMode = true; SettingsStore.shared.contrast = true }
+    @objc private func engLocal() { enginePref = "local"; SettingsStore.shared.engine = "local"; SettingsStore.shared.save() }
+    @objc private func engCloud() { enginePref = "cloud"; SettingsStore.shared.engine = "cloud"; SettingsStore.shared.save() }
+    @objc private func engAuto() { enginePref = "auto"; SettingsStore.shared.engine = "auto"; SettingsStore.shared.save() }
+    @objc private func langZh() { targetLang = "zh"; SettingsStore.shared.tgtLang = "zh"; SettingsStore.shared.save() }
+    @objc private func langEn() { targetLang = "en"; SettingsStore.shared.tgtLang = "en"; SettingsStore.shared.save() }
+    @objc private func langJa() { targetLang = "ja"; SettingsStore.shared.tgtLang = "ja"; SettingsStore.shared.save() }
+    @objc private func langKo() { targetLang = "ko"; SettingsStore.shared.tgtLang = "ko"; SettingsStore.shared.save() }
+    @objc private func modeTrans() { contrastMode = false; SettingsStore.shared.contrast = false; SettingsStore.shared.save() }
+    @objc private func modeContrast() { contrastMode = true; SettingsStore.shared.contrast = true; SettingsStore.shared.save() }
 
     @objc private func toggleAutostart() {
         let next = !MacSecrets.autostartEnabled()
