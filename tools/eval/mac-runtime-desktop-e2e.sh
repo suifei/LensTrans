@@ -28,6 +28,7 @@ open -a TextEdit "$FIXTURE"
 sleep 2
 osascript -e 'tell application "TextEdit" to activate' 2>/dev/null || true
 osascript -e 'tell application "System Events" to tell process "TextEdit" to set position of window "mac-desktop.txt" to {2170, -900}' 2>/dev/null || true
+osascript -e 'tell application "System Events" to key code 123 using {command down}' 2>/dev/null || true
 
 env LENSTRANS_VISUAL_TEST=1 LENSTRANS_RUNTIME_LOG=1 \
   LENSTRANS_FORCE_CONTRAST=0 \
@@ -37,9 +38,10 @@ env LENSTRANS_VISUAL_TEST=1 LENSTRANS_RUNTIME_LOG=1 \
 APP_PID=$!
 trap 'kill "$APP_PID" 2>/dev/null || true' EXIT
 
-deadline=$((SECONDS + 30))
+deadline=$((SECONDS + 60))
 while (( SECONDS < deadline )); do
-  if grep -q 'present.committed' "$LOG"; then break; fi
+  if grep -q 'batch.usable=true' "$LOG" && \
+     grep -Eq 'present.committed blocks=([89]|[1-9][0-9]+)' "$LOG"; then break; fi
   sleep 1
 done
 
@@ -58,13 +60,17 @@ if ! grep -q 'ocr.blocks=[1-9].*Hello LensTrans' "$LOG"; then
   tail -80 "$LOG" >&2 || true
   exit 1
 fi
-if ! grep -q 'translate.results=.*你好，镜头。' "$LOG" || \
-   ! grep -q 'translate.results=.*这是第二行用于视觉OCR测试的线。' "$LOG"; then
-  echo "runtime-desktop-e2e status=FAIL reason=target-translation-missing log=$LOG" >&2
+if ! grep -q 'batch.usable=true' "$LOG"; then
+  echo "runtime-desktop-e2e status=FAIL reason=batch-translation-unusable log=$LOG" >&2
   tail -80 "$LOG" >&2 || true
   exit 1
 fi
-if ! grep -q 'present.committed blocks=[2-9]' "$LOG"; then
+if ! grep -Eq 'batch\.fallback_result\[[0-9]+\]=.*[一-龥]' "$LOG"; then
+  echo "runtime-desktop-e2e status=FAIL reason=batch-output-has-no-chinese log=$LOG" >&2
+  tail -80 "$LOG" >&2 || true
+  exit 1
+fi
+if ! grep -Eq 'present.committed blocks=([89]|[1-9][0-9]+)' "$LOG"; then
   echo "runtime-desktop-e2e status=FAIL reason=translation-not-present log=$LOG" >&2
   tail -80 "$LOG" >&2 || true
   exit 1

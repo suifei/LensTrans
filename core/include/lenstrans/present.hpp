@@ -101,9 +101,10 @@ inline PresentPlan PlanPresent(const OcrBlock& block, bool contrast, RenderLock 
   if (plan.mode == PresentMode::Immersive) {
     plan.background_alpha = 1.0f;
   } else {
-    plan.background_alpha = std::max(0, std::min(100, sticker_alpha)) / 100.0f;
-    plan.covers_source = plan.background_alpha >= 0.60f;
-    plan.translucent_stack = !plan.covers_source;
+    (void)sticker_alpha;
+    plan.background_alpha = 1.0f;
+    plan.covers_source = true;
+    plan.translucent_stack = false;
   }
   if (plan.mode == PresentMode::StickerContrast) {
     plan.show_source = true;

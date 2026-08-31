@@ -27,7 +27,7 @@ On-screen text is pixels, not a DOM. LensTrans does not inject hooks or read ano
   │    │                                              │  │
   │    └──────────────────────────────────────────────┘  │
   └──────────────────────────────────────────────────────┘
-         tray  ·  Ctrl+E edit / passthrough  ·  Esc quit
+         tray  ·  right click start/stop  ·  double-click display mode
 ```
 
 The box is a `WS_POPUP` layered HWND (`WS_EX_LAYERED | TOPMOST | TOOLWINDOW`) with no taskbar entry. In **Watching** it sets `WS_EX_TRANSPARENT` so clicks reach the window underneath. In **Editing** it clears passthrough; you drag the title bar and resize with eight 12 px handles. Multiple boxes are supported, each with its own state machine:
@@ -64,7 +64,7 @@ Most screen translators grab a bitmap and open a **separate result window**. Len
 | Cloud engine | WinHTTP `POST {base}/chat/completions`. Base URL / model / API key all **empty**; empty disables cloud |
 | Secrets | DPAPI on disk; settings serialization must not contain `api_key` (unit-tested) |
 | UI | 5-tab settings, 3-step first-run (does not start WGC during onboarding) |
-| Hotkeys | `Ctrl+E` edit/passthrough · `Ctrl+Shift+L` new box · `Ctrl+T` pause · `Ctrl+Shift+H` hide · `Ctrl+,` settings |
+| Mouse | Right click start/stop · left double-click overlay/bilingual · interior drag move · edge drag resize |
 
 ## Quick start
 
@@ -72,7 +72,7 @@ Requires Windows 10 21H2+ or Windows 11, x64, Visual Studio 2022, and a Windows 
 
 1. Clone this repo. Fetch llama.cpp **b10688** per [Build](#build), and the GGUF per [models/README.md](models/README.md).
 2. Build `lenstrans_overlay` and run `build\Release\lenstrans_overlay.exe`.
-3. Allow **screen recording** if Windows asks. Draw a box over English UI. `Ctrl+E` to click through to the window underneath.
+3. Allow **screen recording** if Windows asks. Draw a box over UI text, then right-click inside it to start translating.
 4. Optional cloud: open Settings and paste *your* Base URL, model id, and key. Nothing is pre-filled.
 
 A scripted zip (not Inno / NSIS / a store-signed package) is documented in [docs/installer.md](docs/installer.md). There is no production-signed MSIX in this tree.

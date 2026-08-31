@@ -15,6 +15,7 @@ namespace lenstrans::win {
 enum class TrayCmd {
   ToggleBoxes = 1,
   NewBox,
+  ToggleTranslation,
   Pause,
   EngineLocal,
   EngineCloud,

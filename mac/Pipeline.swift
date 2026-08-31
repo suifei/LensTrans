@@ -156,10 +156,11 @@ final class OverlayWatchSession {
 
             // Keep the UI actor free while OCR results are translated. The worker creates one
             // engine per tick so model access remains serialized inside that task.
-            let requests = visibleBlocks.map {
-                MacTranslateRequest(text: $0.text.trimmingCharacters(in: .whitespacesAndNewlines),
-                                     srcLang: "auto", tgtLang: target, quality: store.quality)
-            }
+            let workBlocks = visibleBlocks
+            guard let batchSource = MacCoreBridge.batchSource(blocks: workBlocks) else { return }
+            let requests = [MacTranslateRequest(
+                text: batchSource, srcLang: "auto", tgtLang: target,
+                quality: store.quality, batchProtocol: true)]
             let translated = await Self.translateInBackground(
                 requests: requests, kind: kind, modelPath: modelPath,
                 cliPath: MacPaths.findLlamaCli(), cloudBaseURL: store.cloudBaseURL,
@@ -172,13 +173,54 @@ final class OverlayWatchSession {
             // The user may have released the temporary hotkey while the model was running.
             // Never paint a stale result after the session has been stopped or edited.
             guard running, panel.mode == .watching || panel.mode == .translating else { return }
+            guard let batchResult = translated.first else { return }
+            var batchTranslations = MacCoreBridge.parseBatch(
+                output: batchResult.text, count: workBlocks.count)
+            var batchUsable = MacCoreBridge.batchOutputUsable(
+                blocks: workBlocks, output: batchResult.text)
+            if !batchUsable && workBlocks.count > MacCoreBridge.batchFallbackGroupSize {
+                let size = MacCoreBridge.batchFallbackGroupSize
+                var fallbackRequests: [MacTranslateRequest] = []
+                var ranges: [Range<Int>] = []
+                for begin in stride(from: 0, to: workBlocks.count, by: size) {
+                    let range = begin..<min(workBlocks.count, begin + size)
+                    guard let source = MacCoreBridge.batchSource(
+                        blocks: Array(workBlocks[range])) else { continue }
+                    ranges.append(range)
+                    fallbackRequests.append(MacTranslateRequest(
+                        text: source, srcLang: "auto", tgtLang: target,
+                        quality: store.quality, batchProtocol: true))
+                }
+                let fallbackResults = await Self.translateInBackground(
+                    requests: fallbackRequests, kind: kind, modelPath: modelPath,
+                    cliPath: MacPaths.findLlamaCli(), cloudBaseURL: store.cloudBaseURL,
+                    cloudKey: cloudKey, cloudModel: store.cloudModel)
+                batchTranslations = Array(repeating: "", count: workBlocks.count)
+                var usableGroups = 0
+                for (groupIndex, range) in ranges.enumerated() where groupIndex < fallbackResults.count {
+                    let groupBlocks = Array(workBlocks[range])
+                    let result = fallbackResults[groupIndex]
+                    RuntimeLog.info("batch.fallback_result[\(groupIndex)]=\(result.text)")
+                    if MacCoreBridge.batchOutputUsable(blocks: groupBlocks, output: result.text) {
+                        usableGroups += 1
+                    }
+                    let parsed = MacCoreBridge.parseBatch(output: result.text, count: groupBlocks.count)
+                    for (offset, text) in parsed.enumerated() {
+                        batchTranslations[range.lowerBound + offset] = text
+                    }
+                }
+                batchUsable = MacCoreBridge.batchFallbackUsable(
+                    totalGroups: ranges.count, usableGroups: usableGroups)
+                RuntimeLog.info("batch.fallback_groups=\(ranges.count) usable=\(usableGroups)")
+            }
+            RuntimeLog.info("batch.usable=\(batchUsable) blocks=\(workBlocks.count)")
+            guard batchUsable else { return }
             var plans: [MacPresentBlock] = []
-            for (index, block) in visibleBlocks.prefix(16).enumerated() {
-                let source = requests[index].text
+            for (index, block) in workBlocks.enumerated() {
+                let source = block.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 let cacheKey = "\(target)|\(source.lowercased())|\(store.quality)"
-                let text = TranslationCacheStore.shared.get(cacheKey) ?? translated[index].text
-                guard !text.isEmpty, translated[index].error.isEmpty ||
-                        TranslationCacheStore.shared.get(cacheKey) != nil else { continue }
+                let text = TranslationCacheStore.shared.get(cacheKey) ?? batchTranslations[index]
+                guard !text.isEmpty else { continue }
                 if TranslationCacheStore.shared.get(cacheKey) == nil {
                     TranslationCacheStore.shared.put(cacheKey, text)
                 }

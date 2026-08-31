@@ -84,8 +84,8 @@ enum MacPresent {
             ctx.fill(bounds)
             drawString(text, color: safeText, in: targetRect, ctx: ctx, maxFont: maxFont)
         case .sticker, .stickerContrast:
-            let a = min(1, max(0.6, stickerAlpha))
-            ctx.setFillColor(fill.withAlphaComponent(a).cgColor)
+            _ = stickerAlpha
+            ctx.setFillColor(fill.withAlphaComponent(1).cgColor)
             ctx.fill(bounds)
             drawString(text, color: safeText, in: targetRect, ctx: ctx, maxFont: maxFont)
             if let sourceRect, let source, !source.isEmpty {

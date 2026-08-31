@@ -27,7 +27,7 @@
   │    │                                              │  │
   │    └──────────────────────────────────────────────┘  │
   └──────────────────────────────────────────────────────┘
-         트레이  ·  Ctrl+E 편집 / 통과  ·  Esc 종료
+         트레이  ·  오른쪽 클릭 시작/중지  ·  왼쪽 더블 클릭 모드 전환
 ```
 
 박스는 `WS_POPUP` 레이어드 HWND(`WS_EX_LAYERED | TOPMOST | TOOLWINDOW`)이며 작업 표시줄에 올리지 않습니다. **Watching**에서는 `WS_EX_TRANSPARENT`를 켜서 클릭이 아래 창으로 빠집니다. **Editing**에서는 통과를 끄고, 제목 표시줄을 끌거나 여덟 방향 12px 핸들로 크기를 바꿉니다. 여러 박스를 지원하며, 박스마다 상태 기계가 있습니다.
@@ -64,7 +64,7 @@ Hidden → Editing → Watching ⇄ Translating
 | 클라우드 번역 | WinHTTP `POST {base}/chat/completions`. Base URL / Model / API Key **전부 공란**. 비어 있으면 비활성 |
 | 키 | DPAPI로 디스크에 저장. 설정 직렬화에 `api_key`가 나오면 안 됨(단위 테스트 있음) |
 | UI | 설정 5개 탭, 최초 3단계 안내(안내 중에는 WGC를 켜지 않음) |
-| 단축키 | `Ctrl+E` 편집/통과 · `Ctrl+Shift+L` 새 박스 · `Ctrl+T` 일시정지 · `Ctrl+Shift+H` 숨김 · `Ctrl+,` 설정 |
+| 마우스 | 오른쪽 클릭 시작/중지 · 왼쪽 더블 클릭 번역/대조 · 내부 드래그 이동 · 가장자리 드래그 크기 조절 |
 
 ## 빠른 시작
 
@@ -72,7 +72,7 @@ Hidden → Editing → Watching ⇄ Translating
 
 1. 이 저장소를 clone합니다. [빌드](#빌드)대로 llama.cpp **b10688**을 받고, [models/README.md](models/README.md)대로 GGUF를 둡니다.
 2. `lenstrans_overlay`를 빌드하고 `build\Release\lenstrans_overlay.exe`를 실행합니다.
-3. 화면 녹화 권한을 물으면 허용합니다. 영어 UI 위에 박스를 그립니다. `Ctrl+E`로 통과로 바꾼 뒤 아래 창을 클릭합니다.
+3. 화면 녹화 권한을 허용하고 번역할 텍스트 위에 박스를 놓은 뒤 박스 안을 오른쪽 클릭합니다.
 4. 클라우드를 쓸 때는 설정을 열고 **본인** Base URL, 모델 이름, Key만 넣습니다. 소스에 게이트웨이를 미리 넣지 않습니다.
 
 스크립트 zip(Inno / NSIS / 스토어 서명 패키지가 아님)은 [docs/installer.md](docs/installer.md). 이 트리에는 제품 서명 MSIX가 없습니다.

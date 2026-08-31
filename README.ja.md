@@ -27,7 +27,7 @@
   │    │                                              │  │
   │    └──────────────────────────────────────────────┘  │
   └──────────────────────────────────────────────────────┘
-         トレイ  ·  Ctrl+E 編集 / 透過  ·  Esc 終了
+         トレイ  ·  右クリックで開始/停止  ·  左ダブルクリックで表示切替
 ```
 
 枠は `WS_POPUP` のレイヤード HWND（`WS_EX_LAYERED | TOPMOST | TOOLWINDOW`）で、タスクバーには出しません。**Watching** では `WS_EX_TRANSPARENT` を立て、クリックは下のウィンドウへ抜けます。**Editing** では透過を外し、タイトルバーのドラッグと八方向 12px ハンドルでリサイズできます。複数枠に対応し、枠ごとにステートマシンを持ちます。
@@ -64,7 +64,7 @@ Hidden → Editing → Watching ⇄ Translating
 | クラウド翻訳 | WinHTTP `POST {base}/chat/completions`。Base URL / Model / API Key は **すべて空**。空なら無効 |
 | 鍵 | DPAPI でディスクへ。設定のシリアライズに `api_key` を出さない（単体テストあり） |
 | UI | 設定 5 タブ、初回 3 ステップ案内（案内中は WGC を起こさない） |
-| ホットキー | `Ctrl+E` 編集/透過 · `Ctrl+Shift+L` 新規枠 · `Ctrl+T` 一時停止 · `Ctrl+Shift+H` 全隠 · `Ctrl+,` 設定 |
+| マウス | 右クリックで開始/停止 · 左ダブルクリックで置換/対訳 · 内側ドラッグで移動 · 端ドラッグでサイズ変更 |
 
 ## クイックスタート
 
@@ -72,7 +72,7 @@ Hidden → Editing → Watching ⇄ Translating
 
 1. 本リポジトリを clone。[ビルド](#ビルド) に従い llama.cpp **b10688** を取り、[models/README.md](models/README.md) に従い GGUF を置く。
 2. `lenstrans_overlay` をビルドし、`build\Release\lenstrans_overlay.exe` を実行する。
-3. 画面収録の許可が出たら許可する。英語 UI に枠を置く。`Ctrl+E` で透過に切り替えてから下の窓をクリックする。
+3. 画面収録の許可が出たら許可する。翻訳対象の文字に枠を置き、枠内を右クリックして開始する。
 4. クラウドを使う場合は設定を開き、**自分の** Base URL・モデル名・Key だけを書く。ソースにゲートウェイは同梱しない。
 
 スクリプトによる zip（Inno / NSIS / ストア署名パッケージではない）は [docs/installer.md](docs/installer.md)。本ツリーに本番署名済み MSIX はありません。
