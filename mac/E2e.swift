@@ -80,6 +80,7 @@ enum MacE2e {
         var dragOk = false
         var streamReuseOk = false
         var overlayPresentOk = false
+        var runtimeOverlayOk = false
         var sampleSrc = ""
         var sampleHyp = ""
         var presentMode = ""
@@ -239,6 +240,9 @@ enum MacE2e {
             let capture = OverlayCapture()
             let region = fixture.frame
             let screen = fixture.screen ?? NSScreen.main
+            let fixtureDisplayID = screen.flatMap {
+                $0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
+            }
             let origin = screen?.frame.origin ?? .zero
             let screenH = screen?.frame.height ?? region.height
             let crop = CGRect(
@@ -248,12 +252,15 @@ enum MacE2e {
                 height: region.height
             )
             do {
-                try await capture.start(region: crop)
+                try await capture.start(region: crop, displayID: fixtureDisplayID)
                 for _ in 0..<20 {
                     try? await Task.sleep(nanoseconds: 100_000_000)
                     if (try? await capture.grab()) != nil { break }
                 }
                 let frame = try await capture.grab()
+                let capturePreviewPath = URL(fileURLWithPath: args.outPath)
+                    .deletingLastPathComponent().appendingPathComponent("mac-sckit-frame.png").path
+                lines.append("- sckit_frame_png: \(writeBgraPNG(frame, path: capturePreviewPath) ? capturePreviewPath : "FAIL")")
                 let blocks = try MacOcr.recognize(bgra: frame.bgra, width: frame.width, height: frame.height)
                 let joined = blocks.map(\.text).joined(separator: " ")
                 captureOk = joined.uppercased().contains("HELLO") || joined.uppercased().contains("LENSTRANS")
@@ -262,12 +269,48 @@ enum MacE2e {
 
                 // Reuse: multiple start/updateRegion must NOT bump startCapture count.
                 let startsAfterFirst = capture.startCount
-                try await capture.start(region: crop.offsetBy(dx: 2, dy: 0))
-                try await capture.updateRegion(crop)
-                try await capture.start(region: crop)
+                try await capture.start(region: crop.offsetBy(dx: 2, dy: 0), displayID: fixtureDisplayID)
+                try await capture.updateRegion(crop, displayID: fixtureDisplayID)
+                try await capture.start(region: crop, displayID: fixtureDisplayID)
                 streamReuseOk = capture.startCount == startsAfterFirst && startsAfterFirst == 1
                 lines.append("- sckit_start_count: \(capture.startCount) (expect 1)")
                 lines.append("- sckit_stream_reuse_ok: \(streamReuseOk)")
+
+                // Full runtime path: real SCKit frame -> Vision blocks -> Metal translation
+                // -> shared CoreBridge layout -> native OverlayPanel bitmap.
+                let runtimePanel = OverlayPanel(contentRect: fixture.frame)
+                runtimePanel.showPanel()
+                let runtimeEngine = MacLocalEngine(modelPath: MacPaths.resolveModelPath())
+                var runtimePlans: [MacPresentBlock] = []
+                for block in blocks {
+                    let request = MacTranslateRequest(text: block.text, srcLang: "auto", tgtLang: "zh")
+                    let result = runtimeEngine.translate(request)
+                    guard result.error.isEmpty, !result.text.isEmpty,
+                          let layout = MacCoreBridge.layout(
+                            block: block, translation: result.text,
+                            frameSize: CGSize(width: frame.width, height: frame.height),
+                            targetSize: fixture.frame.size, contrast: false,
+                            render: "auto", stickerAlpha: 92, fontScale: 100) else { continue }
+                    runtimePlans.append(MacPresentBlock(
+                        rect: layout.rect, mode: layout.mode, text: result.text,
+                        source: nil,
+                        fill: NSColor(calibratedRed: layout.fillColor.red,
+                                      green: layout.fillColor.green,
+                                      blue: layout.fillColor.blue, alpha: 1),
+                        textColor: NSColor(calibratedRed: layout.textColor.red,
+                                           green: layout.textColor.green,
+                                           blue: layout.textColor.blue, alpha: 1),
+                        stickerAlpha: 0.92, fontSize: layout.fontSize))
+                }
+                runtimePanel.applyPresent(blocks: runtimePlans)
+                let runtimePath = URL(fileURLWithPath: args.outPath)
+                    .deletingLastPathComponent().appendingPathComponent("mac-runtime-overlay.png").path
+                let runtimePng = writeLayerPNG(runtimePanel.presentLayer, path: runtimePath)
+                runtimeOverlayOk = !runtimePlans.isEmpty && runtimePanel.presentLayer.contents != nil && runtimePng
+                lines.append("- runtime_overlay_blocks: \(runtimePlans.count)")
+                lines.append("- runtime_overlay_png: \(runtimePng ? runtimePath : "FAIL")")
+                lines.append("- runtime_overlay_ok: \(runtimeOverlayOk)")
+                runtimePanel.enterHidden()
                 capture.stop()
             } catch {
                 captureSkip = true
@@ -290,7 +333,7 @@ enum MacE2e {
         let pass = ocrOk && presentOk && coverOk && translateOk
             && dragOk && overlayPresentOk && streamReuseOk
         let captureGate = !args.requireScreenCapture || (!captureSkip && captureOk)
-        let finalPass = pass && captureGate
+        let finalPass = pass && captureGate && (!args.requireScreenCapture || runtimeOverlayOk)
 
         lines.append("")
         lines.append("## Result")
@@ -307,6 +350,7 @@ enum MacE2e {
             lines.append("- SCKIT: \(captureOk ? "PASS" : "FAIL")")
         }
         lines.append("- SCKIT_REQUIRED: \(captureGate ? "PASS" : "FAIL")")
+        lines.append("- RUNTIME_OVERLAY: \(runtimeOverlayOk ? "PASS" : "FAIL")")
         lines.append("- RESULT: \(finalPass ? "PASS" : "FAIL")")
         if !detail.isEmpty { lines.append("- detail: \(detail)") }
         lines.append("")
@@ -361,6 +405,30 @@ enum MacE2e {
         guard let destination = CGImageDestinationCreateWithURL(
             url, "public.png" as CFString, 1, nil
         ) else { return false }
+        CGImageDestinationAddImage(destination, image, nil)
+        return CGImageDestinationFinalize(destination)
+    }
+
+    private static func writeBgraPNG(
+        _ frame: (width: Int, height: Int, bgra: Data, sequence: UInt64), path: String
+    ) -> Bool {
+        guard frame.width > 0, frame.height > 0,
+              frame.bgra.count >= frame.width * frame.height * 4 else { return false }
+        let provider = CGDataProvider(data: frame.bgra as CFData)
+        guard let provider,
+              let image = CGImage(
+                width: frame.width, height: frame.height,
+                bitsPerComponent: 8, bitsPerPixel: 32,
+                bytesPerRow: frame.width * 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGBitmapInfo.byteOrder32Little.union(
+                    CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue)),
+                provider: provider, decode: nil, shouldInterpolate: false,
+                intent: .defaultIntent
+              ) else { return false }
+        let url = URL(fileURLWithPath: path) as CFURL
+        guard let destination = CGImageDestinationCreateWithURL(url, "public.png" as CFString, 1, nil)
+        else { return false }
         CGImageDestinationAddImage(destination, image, nil)
         return CGImageDestinationFinalize(destination)
     }

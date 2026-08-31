@@ -1,0 +1,3 @@
+Hello LensTrans
+This is a second line for visual OCR testing.
+Please move this translation box after it starts.

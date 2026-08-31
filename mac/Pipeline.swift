@@ -4,6 +4,17 @@ import LensTransLogic
 
 // Capture → OCR → Engine → Present watch loop (parity with win/overlay TranslateCommitted).
 
+private enum RuntimeLog {
+    static var enabled: Bool {
+        ProcessInfo.processInfo.environment["LENSTRANS_RUNTIME_LOG"] == "1"
+    }
+
+    static func info(_ message: @autoclosure () -> String) {
+        guard enabled else { return }
+        fputs("[LensTrans] \(message())\n", stderr)
+    }
+}
+
 @MainActor
 final class OverlayWatchSession {
     private weak var panel: OverlayPanel?
@@ -63,11 +74,15 @@ final class OverlayWatchSession {
         guard running, let panel else { return }
         let region = Self.captureRegion(for: panel)
         let displayID = Self.displayID(for: panel.screen)
+        let displayText = displayID.map { String($0) } ?? "nil"
+        RuntimeLog.info("capture.start region=\(region) display=\(displayText)")
         let exclude = [CGWindowID(panel.windowNumber)]
         do {
             try await capture.start(region: region, displayID: displayID, excludingWindowIDs: exclude)
+            RuntimeLog.info("capture.ready starts=\(capture.startCount)")
         } catch {
             capture.lastError = error.localizedDescription
+            RuntimeLog.info("capture.error \(error.localizedDescription)")
         }
     }
 
@@ -90,7 +105,10 @@ final class OverlayWatchSession {
                 )
             }
             let frame = try await capture.grab()
+            RuntimeLog.info("frame.ready size=\(frame.width)x\(frame.height) sequence=\(frame.sequence)")
             let blocks = try MacOcr.recognize(bgra: frame.bgra, width: frame.width, height: frame.height)
+            let ocrText = blocks.map(\.text).joined(separator: " | ")
+            RuntimeLog.info("ocr.blocks=\(blocks.count) text=\(ocrText)")
             if blocks.isEmpty {
                 let now = Date()
                 if emptySince == nil { emptySince = now }
@@ -124,7 +142,11 @@ final class OverlayWatchSession {
                 localOk: local.ready,
                 cloudOk: cloud.ready
             )
-            let contrast = store.contrast || TrayController.shared.contrastMode
+            RuntimeLog.info("engine.route=\(String(describing: kind)) localReady=\(local.ready) model=\(modelPath)")
+            let contrastOverride = ProcessInfo.processInfo.environment["LENSTRANS_FORCE_CONTRAST"]
+                .flatMap { Int($0) }
+            let contrast = contrastOverride.map { $0 != 0 }
+                ?? (store.contrast || TrayController.shared.contrastMode)
             let target = store.tgtLang.isEmpty ? TrayController.shared.targetLang : store.tgtLang
             let layoutKey = visibleBlocks.map {
                 "\($0.text.lowercased())@\(Int($0.x)),\(Int($0.y)),\(Int($0.w)),\(Int($0.h))"
@@ -142,6 +164,14 @@ final class OverlayWatchSession {
                 requests: requests, kind: kind, modelPath: modelPath,
                 cliPath: MacPaths.findLlamaCli(), cloudBaseURL: store.cloudBaseURL,
                 cloudKey: cloudKey, cloudModel: store.cloudModel)
+            let resultText = translated.map { result in
+                result.backend + ":" + result.text
+                    + (result.error.isEmpty ? "" : " [" + result.error + "]")
+            }.joined(separator: " | ")
+            RuntimeLog.info("translate.results=\(resultText)")
+            // The user may have released the temporary hotkey while the model was running.
+            // Never paint a stale result after the session has been stopped or edited.
+            guard running, panel.mode == .watching || panel.mode == .translating else { return }
             var plans: [MacPresentBlock] = []
             for (index, block) in visibleBlocks.prefix(16).enumerated() {
                 let source = requests[index].text
@@ -171,12 +201,15 @@ final class OverlayWatchSession {
                     fontSize: layout.fontSize
                 ))
                 panel.applyPresent(blocks: plans)
+                RuntimeLog.info("present.blocks=\(plans.count) rect=\(layout.rect) mode=\(layout.mode)")
             }
             guard !plans.isEmpty else { return }
             lastLayoutKey = layoutKey
+            RuntimeLog.info("present.committed blocks=\(plans.count)")
         } catch {
             // Permission / no-frame: keep watching; do not crash the app.
             capture.lastError = error.localizedDescription
+            RuntimeLog.info("tick.error \(error.localizedDescription)")
         }
     }
 

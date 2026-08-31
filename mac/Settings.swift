@@ -198,7 +198,10 @@ enum SettingsWindow {
 
     private static func buildHotkeys() -> NSView {
         let v = NSView(frame: NSRect(x: 0, y: 0, width: 480, height: 280))
-        let lines = ["⌘⇧L 新建框", "⌘E 编辑/穿透", "⌘T 暂停", "⌘⇧H 全隐", "⌘, 设置"]
+        let lines = [
+            "⌘⇧Space 按住临时翻译；快速双击锁定，再双击关闭",
+            "⌘⇧L 新建框", "⌘E 编辑/穿透", "⌘T 暂停", "⌘⇧H 全隐", "⌘, 设置"
+        ]
         for (i, line) in lines.enumerated() {
             let l = NSTextField(labelWithString: line)
             l.frame = NSRect(x: 16, y: 220 - i * 28, width: 400, height: 24)
