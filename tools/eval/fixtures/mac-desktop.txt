@@ -1,3 +1,56 @@
 Hello LensTrans
 This is a second line for visual OCR testing.
 Please move this translation box after it starts.
+A native Windows live screen translator. Draw a layered, click-through box over any window; LensTrans captures pixels with Windows Graphics Capture (WGC), reads them with system OCR, translates locally (Qwen2.5-0.5B) or through a user-supplied OpenAI-compatible endpoint, and covers the source with immersive fill or a sticker. No Electron, no Tauri, no WebView shell.
+
+What it is
+On-screen text is pixels, not a DOM. LensTrans does not inject hooks or read another process's private memory. It captures only the pixels inside its own boxes, OCRs them, and paints the translation on the same rectangle.
+
+  ┌─ other app ──────────────────────────────────────────┐
+  │  File   Edit   View                                  │
+  │                                                      │
+  │    ┌─ LensTrans box (Watching, click-through) ────┐  │
+  │    │                                              │  │
+  │    │   Settings          →    设置                │  │
+  │    │   Cancel            →    取消                │  │
+  │    │   Please wait…      →    请稍等              │  │
+  │    │                                              │  │
+  │    └──────────────────────────────────────────────┘  │
+  └──────────────────────────────────────────────────────┘
+         tray  ·  Ctrl+E edit / passthrough  ·  Esc quit
+The box is a WS_POPUP layered HWND (WS_EX_LAYERED | TOPMOST | TOOLWINDOW) with no taskbar entry. In Watching it sets WS_EX_TRANSPARENT so clicks reach the window underneath. In Editing it clears passthrough; you drag the title bar and resize with eight 12 px handles. Multiple boxes are supported, each with its own state machine:
+
+Hidden → Editing → Watching ⇄ Translating
+              Paused ← any state (hotkey; capture stops, overlay keeps the last frame)
+Presentation is two honest modes: fill the glyph rectangle with the sampled background majority color and write the translation (immersive), or cover the source with an opaque sticker. Semi-transparent ghost text on top of the original is a bug. Contrast mode is a sticker plus the source at 60% size underneath — not stacked glyphs. If the glyph color fails WCAG AA 4.5:1 against the fill, it is inverted against that fill.
+
+There are no product screenshots in this repository. The diagram above is structural so we do not hang a fake image URL.
+
+Most screen translators grab a bitmap and open a separate result window. LensTrans stays on the region: pin the box, follow the pixels, cover the source.
+
+Typical popup tool	LensTrans
+Where	A second window, away from the source	A frame pinned to the pixels you drew
+When	One-shot hotkey	Updates as the box contents change
+Offline	Often needs the network	Default local Qwen2.5-0.5B
+How it looks	Source and translation both visible	Immersive fill or a sticker covering the source
+Features
+Area	What ships on Windows
+Overlay	Multi-box, topmost, edit / click-through, full tray menu
+Capture	WGC (window session / monitor crop); GDI BitBlt / PrintWindow fallback
+Change detect	1/4 downsample + 8×8 SSD; idle sleep after ~2 s of no DIFF so CPU does not spin
+OCR	Windows.Media.OCR on an STA thread → unified OcrBlock (text, bbox, sampled color)
+Stabilize	Two matching frames (bbox+text) plus 300 ms debounce before commit
+Present	Immersive replace / sticker (~92% opaque) / sticker + contrast. Pure transparent overlay text is forbidden
+Local engine	Qwen2.5-0.5B Instruct Q4_K_M via llama.cpp b10688 (in-process link or llama-cli)
+Cloud engine	WinHTTP POST {base}/chat/completions. Base URL / model / API key all empty; empty disables cloud
+Secrets	DPAPI on disk; settings serialization must not contain api_key (unit-tested)
+UI	5-tab settings, 3-step first-run (does not start WGC during onboarding)
+Hotkeys	Ctrl+E edit/passthrough · Ctrl+Shift+L new box · Ctrl+T pause · Ctrl+Shift+H hide · Ctrl+, settings
+Quick start
+Requires Windows 10 21H2+ or Windows 11, x64, Visual Studio 2022, and a Windows 10/11 SDK.
+
+Clone this repo. Fetch llama.cpp b10688 per Build, and the GGUF per models/README.md.
+Build lenstrans_overlay and run build\Release\lenstrans_overlay.exe.
+Allow screen recording if Windows asks. Draw a box over English UI. Ctrl+E to click through to the window underneath.
+Optional cloud: open Settings and paste your Base URL, model id, and key. Nothing is pre-filled.
+A scripted zip (not Inno / NSIS / a store-signed package) is documented in docs/installer.md. There is no production-signed MSIX in this tree.

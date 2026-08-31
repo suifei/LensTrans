@@ -11,6 +11,7 @@ final class TrayController: NSObject {
     var contrastMode = false
     var onNewBox: (() -> Void)?
     var onToggleBoxes: (() -> Void)?
+    var onToggleTranslation: (() -> Void)?
     var onPause: (() -> Void)?
     var onQuit: (() -> Void)?
 
@@ -24,9 +25,10 @@ final class TrayController: NSObject {
     func rebuildMenu() {
         let m = NSMenu()
         m.addItem(menu("显示/隐藏全部翻译框", #selector(toggleBoxes)))
-        m.addItem(menu("新建翻译框", #selector(newBox), key: "l"))
+        m.addItem(menu("新建翻译框", #selector(newBox)))
         m.addItem(.separator())
-        m.addItem(menu("暂停/继续", #selector(pause), key: "t"))
+        m.addItem(menu("开始/停止翻译", #selector(toggleTranslation)))
+        m.addItem(menu("暂停/继续", #selector(pause)))
 
         let eng = NSMenu()
         eng.addItem(menu("本地（快）", #selector(engLocal)))
@@ -57,11 +59,11 @@ final class TrayController: NSObject {
         m.addItem(autoItem)
 
         m.addItem(.separator())
-        m.addItem(menu("设置…", #selector(openSettings), key: ","))
+        m.addItem(menu("设置…", #selector(openSettings)))
         m.addItem(menu("检查更新", #selector(checkUpdate)))
         m.addItem(menu("清理缓存", #selector(clearCache)))
         m.addItem(.separator())
-        m.addItem(menu("退出", #selector(quit), key: "q"))
+        m.addItem(menu("退出", #selector(quit)))
         item?.menu = m
     }
 
@@ -83,6 +85,11 @@ final class TrayController: NSObject {
         if let onPause { onPause() } else { OverlayBoxStore.shared.pauseAll() }
     }
 
+    @objc private func toggleTranslation() {
+        if let onToggleTranslation { onToggleTranslation() }
+        else { OverlayBoxStore.shared.toggleTranslation() }
+    }
+
     @objc private func engLocal() { enginePref = "local"; SettingsStore.shared.engine = "local"; SettingsStore.shared.save() }
     @objc private func engCloud() { enginePref = "cloud"; SettingsStore.shared.engine = "cloud"; SettingsStore.shared.save() }
     @objc private func engAuto() { enginePref = "auto"; SettingsStore.shared.engine = "auto"; SettingsStore.shared.save() }
@@ -90,8 +97,12 @@ final class TrayController: NSObject {
     @objc private func langEn() { targetLang = "en"; SettingsStore.shared.tgtLang = "en"; SettingsStore.shared.save() }
     @objc private func langJa() { targetLang = "ja"; SettingsStore.shared.tgtLang = "ja"; SettingsStore.shared.save() }
     @objc private func langKo() { targetLang = "ko"; SettingsStore.shared.tgtLang = "ko"; SettingsStore.shared.save() }
-    @objc private func modeTrans() { contrastMode = false; SettingsStore.shared.contrast = false; SettingsStore.shared.save() }
-    @objc private func modeContrast() { contrastMode = true; SettingsStore.shared.contrast = true; SettingsStore.shared.save() }
+    @objc private func modeTrans() {
+        OverlayBoxStore.shared.setPresentation(bilingual: false)
+    }
+    @objc private func modeContrast() {
+        OverlayBoxStore.shared.setPresentation(bilingual: true)
+    }
 
     @objc private func toggleAutostart() {
         let next = !MacSecrets.autostartEnabled()

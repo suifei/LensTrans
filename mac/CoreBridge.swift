@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import LlamaBridge
 
@@ -13,12 +14,142 @@ enum MacCoreBridge {
     struct Layout {
         var rect: CGRect
         var fontSize: CGFloat
+        var fontWeight: Int
         var lineHeight: CGFloat
+        var textInset: CGSize
+        var cornerRadius: CGFloat
         var mode: MacPresentMode
         var coversSource: Bool
         var showSource: Bool
         var textColor: (red: CGFloat, green: CGFloat, blue: CGFloat)
         var fillColor: (red: CGFloat, green: CGFloat, blue: CGFloat)
+    }
+
+    enum UiActivity: Int32 {
+        case hidden = 0, stopped = 1, active = 2, paused = 3
+    }
+
+    enum UiInput: Int32 {
+        case rightClick = 1, leftDoubleClick = 2, start = 3, stop = 4
+        case pause = 5, resume = 6, hide = 7, show = 8
+        case setOverlay = 9, setBilingual = 10
+    }
+
+    struct UiState {
+        var activity: UiActivity
+        var bilingual: Bool
+    }
+
+    struct UiVisual {
+        var border: NSColor
+        var fillAlpha: CGFloat
+        var showResizeHandles: Bool
+        var showCornerMarkers: Bool
+    }
+
+    static func uiTransition(_ state: UiState, input: UiInput) -> UiState? {
+        var source = LenstransCoreUiState(
+            activity: state.activity.rawValue,
+            presentation: state.bilingual ? Int32(LT_UI_BILINGUAL) : Int32(LT_UI_OVERLAY))
+        var output = LenstransCoreUiState()
+        guard lenstrans_core_ui_transition(&source, input.rawValue, &output) != 0,
+              let activity = UiActivity(rawValue: output.activity) else { return nil }
+        return UiState(activity: activity, bilingual: output.presentation == LT_UI_BILINGUAL)
+    }
+
+    static func uiVisual(_ state: UiState) -> UiVisual? {
+        var source = LenstransCoreUiState(
+            activity: state.activity.rawValue,
+            presentation: state.bilingual ? Int32(LT_UI_BILINGUAL) : Int32(LT_UI_OVERLAY))
+        var output = LenstransCoreUiVisual()
+        guard lenstrans_core_ui_visual(&source, &output) != 0 else { return nil }
+        return UiVisual(
+            border: NSColor(calibratedRed: CGFloat(output.border_red) / 255,
+                            green: CGFloat(output.border_green) / 255,
+                            blue: CGFloat(output.border_blue) / 255, alpha: 1),
+            fillAlpha: CGFloat(output.editing_fill_alpha),
+            showResizeHandles: output.show_resize_handles != 0,
+            showCornerMarkers: output.show_corner_markers != 0)
+    }
+
+    static func uiHitTest(point: CGPoint, size: CGSize, handle: CGFloat,
+                          resizeHandles: Bool) -> Int32 {
+        Int32(lenstrans_core_ui_hit_test(
+            Float(point.x), Float(point.y), Float(size.width), Float(size.height),
+            Float(handle), resizeHandles ? 1 : 0))
+    }
+
+    static func uiDrag(start: CGRect, anchor: Int32, dx: CGFloat, dy: CGFloat,
+                       minSize: CGSize) -> CGRect? {
+        var x: Float = 0, y: Float = 0, width: Float = 0, height: Float = 0
+        guard lenstrans_core_ui_drag(
+            Float(start.minX), Float(start.minY), Float(start.width), Float(start.height),
+            anchor, Float(dx), Float(dy), Float(minSize.width), Float(minSize.height),
+            &x, &y, &width, &height) != 0 else { return nil }
+        return CGRect(x: CGFloat(x), y: CGFloat(y), width: CGFloat(width), height: CGFloat(height))
+    }
+
+    static func batchSource(blocks: [MacOcrBlock]) -> String? {
+        guard let batch = lenstrans_core_batch_create() else { return nil }
+        defer { lenstrans_core_batch_destroy(batch) }
+        for block in blocks {
+            let ok = block.text.withCString {
+                lenstrans_core_batch_add(batch, $0, block.x, block.y, block.w, block.h)
+            }
+            guard ok != 0 else { return nil }
+        }
+        var output = [CChar](repeating: 0, count: 256 * 1024)
+        guard lenstrans_core_batch_source(batch, &output, output.count) != 0 else { return nil }
+        return String(cString: output)
+    }
+
+    static func batchPrompt(source: String, sourceLanguage: String,
+                            targetLanguage: String, chatWrapped: Bool) -> String? {
+        var output = [CChar](repeating: 0, count: 320 * 1024)
+        let ok = source.withCString { sourcePtr in
+            sourceLanguage.withCString { sourceLanguagePtr in
+                targetLanguage.withCString { targetPtr in
+                    if chatWrapped {
+                        return lenstrans_core_batch_chat_prompt(
+                            sourcePtr, sourceLanguagePtr, targetPtr, &output, output.count)
+                    }
+                    return lenstrans_core_batch_user_prompt(
+                        sourcePtr, sourceLanguagePtr, targetPtr, &output, output.count)
+                }
+            }
+        }
+        return ok != 0 ? String(cString: output) : nil
+    }
+
+    static func parseBatch(output: String, count: Int) -> [String] {
+        guard count > 0 else { return [] }
+        return (0..<count).map { index in
+            var item = [CChar](repeating: 0, count: 16 * 1024)
+            let ok = output.withCString {
+                lenstrans_core_batch_parse_item($0, count, index, &item, item.count)
+            }
+            return ok != 0 ? String(cString: item) : ""
+        }
+    }
+
+    static func batchOutputUsable(blocks: [MacOcrBlock], output: String) -> Bool {
+        guard let batch = lenstrans_core_batch_create() else { return false }
+        defer { lenstrans_core_batch_destroy(batch) }
+        for block in blocks {
+            let ok = block.text.withCString {
+                lenstrans_core_batch_add(batch, $0, block.x, block.y, block.w, block.h)
+            }
+            if ok == 0 { return false }
+        }
+        return output.withCString { lenstrans_core_batch_output_usable(batch, $0) != 0 }
+    }
+
+    static var batchFallbackGroupSize: Int {
+        max(1, Int(lenstrans_core_batch_fallback_group_size()))
+    }
+
+    static func batchFallbackUsable(totalGroups: Int, usableGroups: Int) -> Bool {
+        lenstrans_core_batch_fallback_usable(totalGroups, usableGroups) != 0
     }
 
     static func route(preference: String, privacy: Bool, textCharacters: Int,
@@ -100,7 +231,11 @@ enum MacCoreBridge {
         return Layout(
             rect: CGRect(x: CGFloat(output.x), y: CGFloat(output.y),
                          width: CGFloat(output.width), height: CGFloat(output.height)),
-            fontSize: CGFloat(output.font_px), lineHeight: CGFloat(output.line_height_px),
+            fontSize: CGFloat(output.font_px), fontWeight: Int(output.font_weight),
+            lineHeight: CGFloat(output.line_height_px),
+            textInset: CGSize(width: CGFloat(output.text_inset_x),
+                              height: CGFloat(output.text_inset_y)),
+            cornerRadius: CGFloat(output.corner_radius),
             mode: mode, coversSource: output.covers_source != 0, showSource: output.show_source != 0,
             textColor: (CGFloat(output.text_red) / 255, CGFloat(output.text_green) / 255,
                         CGFloat(output.text_blue) / 255),

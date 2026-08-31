@@ -110,7 +110,6 @@ enum SettingsWindow {
         tab.addTabViewItem(makeTab("通用", buildGeneral(store, &f)))
         tab.addTabViewItem(makeTab("翻译", buildTranslate(store, &f)))
         tab.addTabViewItem(makeTab("呈现", buildPresent(store, &f)))
-        tab.addTabViewItem(makeTab("热键", buildHotkeys()))
         tab.addTabViewItem(makeTab("关于", buildAbout()))
         fields = f
 
@@ -120,6 +119,8 @@ enum SettingsWindow {
         SettingsSaveTarget.shared.onSave = {
             applyFields()
             store.save()
+            TrayController.shared.contrastMode = store.contrast
+            OverlayBoxStore.shared.refreshAppearance()
             win.close()
             SettingsWindow.window = nil
         }
@@ -193,20 +194,6 @@ enum SettingsWindow {
         contrast.frame = NSRect(x: 16, y: 180, width: 280, height: 24)
         f.contrast = contrast
         v.addSubview(contrast)
-        return v
-    }
-
-    private static func buildHotkeys() -> NSView {
-        let v = NSView(frame: NSRect(x: 0, y: 0, width: 480, height: 280))
-        let lines = [
-            "⌘⇧Space 按住临时翻译；快速双击锁定，再双击关闭",
-            "⌘⇧L 新建框", "⌘E 编辑/穿透", "⌘T 暂停", "⌘⇧H 全隐", "⌘, 设置"
-        ]
-        for (i, line) in lines.enumerated() {
-            let l = NSTextField(labelWithString: line)
-            l.frame = NSRect(x: 16, y: 220 - i * 28, width: 400, height: 24)
-            v.addSubview(l)
-        }
         return v
     }
 

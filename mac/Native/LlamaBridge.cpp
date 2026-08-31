@@ -1,5 +1,6 @@
 #include "LlamaBridge.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -85,7 +86,7 @@ extern "C" int lenstrans_llama_load(LenstransLlamaEngine *eng) {
   eng->model = llama_model_load_from_file(eng->path.c_str(), mp);
   if (!eng->model) return 0;
   auto cp = llama_context_default_params();
-  cp.n_ctx = 1024;
+  cp.n_ctx = 4096;
   cp.n_batch = 512;
   eng->ctx = llama_init_from_model(eng->model, cp);
   if (!eng->ctx) {
@@ -172,10 +173,14 @@ extern "C" int lenstrans_llama_translate(LenstransLlamaEngine *eng,
   tokens.resize(static_cast<std::size_t>(n));
 
   llama_memory_clear(llama_get_memory(eng->ctx), true);
-  llama_batch batch = llama_batch_get_one(tokens.data(), n);
-  if (llama_decode(eng->ctx, batch) != 0) {
-    set_err(err_buf, err_cap, "decode prompt failed");
-    return -1;
+  constexpr int kPromptChunk = 512;
+  for (int offset = 0; offset < n; offset += kPromptChunk) {
+    const int count = std::min(kPromptChunk, n - offset);
+    llama_batch batch = llama_batch_get_one(tokens.data() + offset, count);
+    if (llama_decode(eng->ctx, batch) != 0) {
+      set_err(err_buf, err_cap, "decode prompt failed");
+      return -1;
+    }
   }
 
   const int max_new = max_new_tokens > 0 ? max_new_tokens : 96;

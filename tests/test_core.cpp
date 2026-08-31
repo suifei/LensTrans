@@ -1,4 +1,5 @@
 #include "lenstrans/autostart.hpp"
+#include "lenstrans/batch_translation.hpp"
 #include "lenstrans/boxes.hpp"
 #include "lenstrans/cache.hpp"
 #include "lenstrans/cloud_http.hpp"
@@ -13,6 +14,7 @@
 #include "lenstrans/router.hpp"
 #include "lenstrans/settings.hpp"
 #include "lenstrans/sha1.hpp"
+#include "lenstrans/ui_state.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -81,6 +83,69 @@ struct TestPresenter final : IPresentationSink {
 };
 
 int main() {
+  {
+    std::vector<OcrBlock> blocks = {
+        {"Hello", {10, 20, 80, 18}, 18, {}, {}, 1},
+        {"world", {10, 42, 90, 18}, 18, {}, {}, 1},
+    };
+    const auto source = BuildBatchSource(blocks);
+    CHECK(source.find("0|||Hello") != std::string::npos);
+    const auto prompt = BuildBatchUserPrompt(
+        source, "its automatically detected source language", "Simplified Chinese");
+    CHECK(prompt.find("不要合并、拆分、省略") != std::string::npos);
+    CHECK(BuildTranslatePrompt({.text = "你好", .src_lang = "zh", .tgt_lang = "en"})
+              .find("from Simplified Chinese into English") != std::string::npos);
+    const auto parsed = ParseBatchTranslation(
+        "0|||你好\n1|||世界", 2);
+    CHECK(parsed.size() == 2 && parsed[0] == "你好" && parsed[1] == "世界");
+    const auto missing = ParseBatchTranslation("[[LT:1]]世界[[/LT:1]]", 2);
+    CHECK(missing[0].empty() && missing[1] == "世界");
+    const auto bound = BindBatchTranslation(blocks, "[[LT:0]]你好[[/LT:0]]");
+    CHECK(bound.size() == 2 && bound[0].source.bbox.x == 10 && bound[0].translation == "你好");
+    CHECK(bound[1].source.bbox.y == 42 && bound[1].translation.empty());
+    CHECK(BatchTranslationUsable(blocks, "0|||你好\n1|||世界"));
+    CHECK(!BatchTranslationUsable(blocks, "0|||Hello\n1|||world"));
+    const auto ranges = BatchRanges(10, 4);
+    CHECK(ranges.size() == 3 && ranges[0].first == 0 && ranges[0].second == 4);
+    CHECK(ranges[2].first == 8 && ranges[2].second == 10);
+    CHECK(BatchFallbackUsable(5, 3));
+    CHECK(!BatchFallbackUsable(5, 2));
+  }
+
+  {
+    UiState ui;
+    CHECK(ui.activity == UiActivity::Stopped);
+    CHECK(ResolveUiVisual(ui).border.b == 255);
+    auto result = ApplyUiInput(ui, UiInput::RightClick);
+    CHECK(result.activity_changed && result.state.activity == UiActivity::Active);
+    CHECK(ResolveUiVisual(result.state).border.g == 209);
+    result = ApplyUiInput(result.state, UiInput::LeftDoubleClick);
+    CHECK(result.presentation_changed && result.state.presentation == UiPresentation::Bilingual);
+    const auto bilingual = ResolveUiVisual(result.state);
+    CHECK(bilingual.border.r == 255 && bilingual.border.g == 159);
+    result = ApplyUiInput(result.state, UiInput::RightClick);
+    CHECK(result.state.activity == UiActivity::Stopped);
+    const auto stopped_bilingual = ResolveUiVisual(result.state);
+    CHECK(stopped_bilingual.border.r == 175 && stopped_bilingual.border.b == 222);
+    result = ApplyUiInput(result.state, UiInput::Pause);
+    CHECK(result.state.activity == UiActivity::Stopped);
+    result = ApplyUiInput(ApplyUiInput(result.state, UiInput::Start).state, UiInput::Pause);
+    CHECK(result.state.activity == UiActivity::Paused);
+    CHECK(ResolveUiVisual(result.state).border.r == 142);
+    CHECK(HitTestUiAnchor(2, 2, 480, 320, 12, true) == UiAnchor::NW);
+    CHECK(HitTestUiAnchor(240, 160, 480, 320, 12, true) == UiAnchor::Move);
+    CHECK(HitTestUiAnchor(240, 160, 480, 320, 12, false) == UiAnchor::Move);
+    const UiRect start{100, 100, 480, 320};
+    const auto north = ApplyUiDrag(start, UiAnchor::N, 0, -40, 80, 80);
+    CHECK(north.y == 60 && north.h == 360 && north.y + north.h == 420);
+    const auto south = ApplyUiDrag(start, UiAnchor::S, 0, 40, 80, 80);
+    CHECK(south.y == 100 && south.h == 360);
+    const auto west_min = ApplyUiDrag(start, UiAnchor::W, 700, 0, 160, 80);
+    CHECK(west_min.x == 420 && west_min.w == 160 && west_min.x + west_min.w == 580);
+    const auto north_min = ApplyUiDrag(start, UiAnchor::N, 0, 500, 80, 80);
+    CHECK(north_min.y == 340 && north_min.h == 80 && north_min.y + north_min.h == 420);
+  }
+
   // SHA-1: "abc" → a9993e364706816aba3e25717850c26c9cd0d89d
   CHECK(Sha1Hex("abc") == "a9993e364706816aba3e25717850c26c9cd0d89d");
   const PresentationSemantics default_presentation{};
@@ -233,7 +298,7 @@ int main() {
   CHECK(idle.ShouldSleep(t0 + std::chrono::milliseconds(4501)));
 
   const auto p = BuildTranslatePrompt({.text = "It's on the house.", .tgt_lang = "zh"});
-  CHECK(p.find("简体中文") != std::string::npos);
+  CHECK(p.find("Simplified Chinese") != std::string::npos);
   CHECK(p.find("It's on the house.") != std::string::npos);
 
   static const char* kPairs[][2] = {
@@ -420,7 +485,7 @@ int main() {
     hi.bbox = {10, 10, 40, 20};
     hi.bg_variance = 40;
     const auto bad = PlanPresent(hi, false, RenderLock::Auto, 20);
-    CHECK(IllegalTransparentStack(bad));
+    CHECK(bad.covers_source && !IllegalTransparentStack(bad));
     const auto good = PlanPresent(hi, false, RenderLock::Auto, 92);
     CHECK(good.covers_source && !IllegalTransparentStack(good));
   }
@@ -491,6 +556,10 @@ int main() {
         CHECK(layout.rect.y + layout.rect.h <= options.target_height);
         CHECK(layout.rect.w > 0 && layout.rect.h > 0);
         CHECK(layout.covers_source && layout.background_alpha >= 0.60f);
+        CHECK(layout.font_weight == 400);
+        CHECK(layout.font_px >= 8 && layout.line_height_px >= layout.font_px);
+        CHECK(layout.text_inset_x >= 2 && layout.text_inset_y >= 1);
+        CHECK(layout.corner_radius >= 1 && layout.corner_radius <= 2);
       }
       CHECK(second.layout[1].mode == PresentMode::Sticker);
     }

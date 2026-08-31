@@ -61,7 +61,7 @@ final class OverlayPanel: NSPanel {
         mode = .editing
         ignoresMouseEvents = false
         chrome?.setInteractionEnabled(true)
-        chrome?.setEditingChrome(true)
+        refreshChrome()
         chrome?.needsDisplay = true
     }
 
@@ -69,7 +69,7 @@ final class OverlayPanel: NSPanel {
         mode = .watching
         ignoresMouseEvents = false
         chrome?.setInteractionEnabled(true)
-        chrome?.setEditingChrome(false)
+        refreshChrome()
         chrome?.needsDisplay = true
         if watchSession == nil { watchSession = OverlayWatchSession(panel: self) }
         watchSession?.start()
@@ -80,7 +80,7 @@ final class OverlayPanel: NSPanel {
         mode = .paused
         ignoresMouseEvents = false
         chrome?.setInteractionEnabled(true)
-        chrome?.setEditingChrome(false)
+        refreshChrome()
     }
 
     func enterHidden() {
@@ -138,12 +138,15 @@ final class OverlayPanel: NSPanel {
             MacPresent.paint(mode: block.mode, text: block.text, source: block.source,
                              fill: block.fill, textColor: block.textColor,
                              stickerAlpha: block.stickerAlpha, in: rect, ctx: ctx,
-                             maxFont: block.fontSize > 0 ? block.fontSize : nil)
+                             maxFont: block.fontSize > 0 ? block.fontSize : nil,
+                             fontWeight: block.fontWeight, textInset: block.textInset,
+                             cornerRadius: block.cornerRadius)
             accepted.append(rect)
         }
         presentLayer.contents = ctx.makeImage()
         presentedRects = accepted
         self.mode = .translating
+        refreshChrome()
         // Keep panel visible above target content while showing translation.
         orderFrontRegardless()
         chrome.needsDisplay = true
@@ -152,6 +155,51 @@ final class OverlayPanel: NSPanel {
     func clearPresent() {
         presentLayer.contents = nil
         presentedRects = []
+    }
+
+    func toggleTranslation() {
+        applyUiInput(.rightClick)
+    }
+
+    func togglePresentationMode() {
+        applyUiInput(.leftDoubleClick)
+    }
+
+    private func refreshChrome() {
+        guard let visual = MacCoreBridge.uiVisual(coreUiState()) else { return }
+        chrome?.setVisual(visual)
+    }
+
+    func refreshAppearance() { refreshChrome() }
+
+    func applyUiInput(_ input: MacCoreBridge.UiInput) {
+        let current = coreUiState()
+        guard let next = MacCoreBridge.uiTransition(current, input: input) else { return }
+        if next.bilingual != current.bilingual {
+            SettingsStore.shared.contrast = next.bilingual
+            TrayController.shared.contrastMode = next.bilingual
+            SettingsStore.shared.save()
+        }
+        switch next.activity {
+        case .hidden: enterHidden()
+        case .stopped: enterEditing()
+        case .active: enterWatching()
+        case .paused: enterPaused()
+        }
+        refreshChrome()
+    }
+
+    private func coreUiState() -> MacCoreBridge.UiState {
+        let activity: MacCoreBridge.UiActivity
+        switch mode {
+        case .hidden: activity = .hidden
+        case .editing: activity = .stopped
+        case .watching, .translating: activity = .active
+        case .paused: activity = .paused
+        }
+        return MacCoreBridge.UiState(
+            activity: activity,
+            bilingual: SettingsStore.shared.contrast || TrayController.shared.contrastMode)
     }
 
     /// E2E: present bitmap has ink nearer the top than the bottom (not upside-down).
@@ -216,21 +264,16 @@ final class OverlayPanel: NSPanel {
 final class OverlayChromeView: NSView {
     weak var panel: OverlayPanel?
 
-    private enum Hit {
-        case none, move
-        case n, s, e, w, ne, nw, se, sw
-    }
-
     private static let handle: CGFloat = 12
     private static let minSize: CGFloat = 80
-    /// Editing fill: enough alpha for hit-testing feedback, still see-through.
-    private static let editFill = NSColor.systemBlue.withAlphaComponent(0.08)
-    private static let borderColor = NSColor.systemBlue
-
     private var showChrome = true
-    private var editingChrome = true
+    private var statusColor = NSColor(calibratedRed: 10 / 255, green: 132 / 255,
+                                      blue: 1, alpha: 1)
+    private var fillAlpha: CGFloat = 0.08
+    private var showResizeHandles = true
+    private var showCornerMarkers = false
     private var interactionEnabled = true
-    private var activeHit: Hit = .none
+    private var activeAnchor: Int32 = 0
     private var grabMouse = NSPoint.zero
     private var grabFrame = NSRect.zero
 
@@ -251,18 +294,24 @@ final class OverlayChromeView: NSView {
         window?.invalidateCursorRects(for: self)
     }
 
-    func setEditingChrome(_ editing: Bool) {
-        // Keep a quiet outline in watching/translating mode so the box remains discoverable
-        // and movable after the blue editing chrome disappears.
+    func setVisual(_ visual: MacCoreBridge.UiVisual) {
         showChrome = true
-        editingChrome = editing
+        statusColor = visual.border
+        fillAlpha = visual.fillAlpha
+        showResizeHandles = visual.showResizeHandles
+        showCornerMarkers = visual.showCornerMarkers
         needsDisplay = true
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current?.compositingOperation = .copy
+        NSColor.clear.setFill()
+        bounds.fill()
+        NSGraphicsContext.restoreGraphicsState()
         if showChrome {
-            if editingChrome {
-                Self.editFill.setFill()
+            if showResizeHandles {
+                statusColor.withAlphaComponent(fillAlpha).setFill()
                 bounds.fill()
                 // Corner handle dots (visual only; hit area is larger).
                 let h = Self.handle
@@ -276,24 +325,24 @@ final class OverlayChromeView: NSView {
                     NSPoint(x: (bounds.width - h) / 2, y: 0),
                     NSPoint(x: bounds.width - h, y: 0),
                 ]
-                NSColor.systemBlue.withAlphaComponent(0.85).setFill()
+                statusColor.withAlphaComponent(0.85).setFill()
                 for p in dots {
                     NSBezierPath(ovalIn: NSRect(x: p.x + 2, y: p.y + 2,
                                                  width: h - 4, height: h - 4)).fill()
                 }
             }
             let path = NSBezierPath(rect: bounds.insetBy(dx: 0.5, dy: 0.5))
-            path.lineWidth = editingChrome ? 1.5 : 2
-            Self.borderColor.withAlphaComponent(editingChrome ? 1 : 0.9).setStroke()
+            path.lineWidth = showResizeHandles ? 1.5 : 2
+            statusColor.withAlphaComponent(showResizeHandles ? 1 : 0.9).setStroke()
             path.stroke()
-            if !editingChrome {
+            if showCornerMarkers {
                 let dot = NSRect(x: 1, y: 1, width: 7, height: 7)
                 let dots = [
                     dot, dot.offsetBy(dx: bounds.width - 9, dy: 0),
                     dot.offsetBy(dx: 0, dy: bounds.height - 9),
                     dot.offsetBy(dx: bounds.width - 9, dy: bounds.height - 9),
                 ]
-                Self.borderColor.withAlphaComponent(0.9).setFill()
+                statusColor.withAlphaComponent(0.9).setFill()
                 for p in dots { NSBezierPath(ovalIn: p).fill() }
             }
         }
@@ -302,78 +351,48 @@ final class OverlayChromeView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         guard showChrome, let panel else { return }
+        if event.clickCount == 2 {
+            activeAnchor = 0
+            panel.togglePresentationMode()
+            return
+        }
         let local = convert(event.locationInWindow, from: nil)
-        activeHit = hit(at: local)
-        guard activeHit != .none else { return }
+        activeAnchor = hitAnchor(at: local)
+        guard activeAnchor != 0 else { return }
         grabMouse = NSEvent.mouseLocation
         grabFrame = panel.frame
         window?.makeKeyAndOrderFront(nil)
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard interactionEnabled, let panel, activeHit != .none else { return }
+        guard interactionEnabled, let panel, activeAnchor != 0 else { return }
         // Window-local coordinates change as the window moves and create a feedback loop.
         // Global screen coordinates remain stable throughout the drag.
         let cur = NSEvent.mouseLocation
-        let dx = cur.x - grabMouse.x
-        let dy = cur.y - grabMouse.y
-        var r = grabFrame
-        switch activeHit {
-        case .move:
-            r.origin.x += dx
-            r.origin.y += dy
-        case .n:
-            r.origin.y += dy
-            r.size.height -= dy
-        case .s:
-            r.size.height += dy
-        case .w:
-            r.origin.x += dx
-            r.size.width -= dx
-        case .e:
-            r.size.width += dx
-        case .ne:
-            r.origin.y += dy
-            r.size.height -= dy
-            r.size.width += dx
-        case .nw:
-            r.origin.x += dx
-            r.size.width -= dx
-            r.origin.y += dy
-            r.size.height -= dy
-        case .se:
-            r.size.width += dx
-            r.size.height += dy
-        case .sw:
-            r.origin.x += dx
-            r.size.width -= dx
-            r.size.height += dy
-        case .none:
-            return
-        }
-        if r.width < Self.minSize {
-            if activeHit == .w || activeHit == .nw || activeHit == .sw {
-                r.origin.x = grabFrame.maxX - Self.minSize
-            }
-            r.size.width = Self.minSize
-        }
-        if r.height < Self.minSize {
-            if activeHit == .n || activeHit == .ne || activeHit == .nw {
-                r.origin.y = grabFrame.maxY - Self.minSize
-            }
-            r.size.height = Self.minSize
-        }
+        let startTopLeft = CGRect(x: grabFrame.minX, y: -grabFrame.maxY,
+                                  width: grabFrame.width, height: grabFrame.height)
+        guard let result = MacCoreBridge.uiDrag(
+            start: startTopLeft, anchor: activeAnchor,
+            dx: cur.x - grabMouse.x, dy: -(cur.y - grabMouse.y),
+            minSize: CGSize(width: Self.minSize, height: Self.minSize)) else { return }
+        let r = NSRect(x: result.minX, y: -(result.minY + result.height),
+                       width: result.width, height: result.height)
         panel.setFrame(r, display: true)
         panel.presentLayer.frame = bounds
     }
 
     override func mouseUp(with event: NSEvent) {
-        activeHit = .none
+        activeAnchor = 0
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        guard event.clickCount == 1, interactionEnabled, let panel else { return }
+        panel.toggleTranslation()
     }
 
     override func resetCursorRects() {
         guard interactionEnabled else { return }
-        guard showChrome else {
+        guard showChrome, showResizeHandles else {
             addCursorRect(bounds, cursor: .openHand)
             return
         }
@@ -386,39 +405,25 @@ final class OverlayChromeView: NSView {
     }
 
     func e2eHitKind(at p: NSPoint) -> String {
-        switch hit(at: p) {
-        case .none: return "none"
-        case .move: return "move"
-        case .n: return "n"
-        case .s: return "s"
-        case .e: return "e"
-        case .w: return "w"
-        case .ne: return "ne"
-        case .nw: return "nw"
-        case .se: return "se"
-        case .sw: return "sw"
+        switch hitAnchor(at: p) {
+        case 1: return "move"
+        case 2: return "n"
+        case 3: return "s"
+        case 4: return "e"
+        case 5: return "w"
+        case 6: return "ne"
+        case 7: return "nw"
+        case 8: return "se"
+        case 9: return "sw"
+        default: return "none"
         }
     }
 
-    private func hit(at p: NSPoint) -> Hit {
-        guard interactionEnabled else { return .none }
-        if !showChrome { return bounds.contains(p) ? .move : .none }
-        let h = Self.handle
-        let nearL = p.x < h
-        let nearR = p.x >= bounds.width - h
-        let nearB = p.y < h
-        let nearT = p.y >= bounds.height - h
-        if nearT && nearL { return .nw }
-        if nearT && nearR { return .ne }
-        if nearB && nearL { return .sw }
-        if nearB && nearR { return .se }
-        if nearT { return .n }
-        if nearB { return .s }
-        if nearL { return .w }
-        if nearR { return .e }
-        // Interior: move whole box (user request — not only a thin border / top bar).
-        if bounds.contains(p) { return .move }
-        return .none
+    private func hitAnchor(at p: NSPoint) -> Int32 {
+        guard interactionEnabled, showChrome else { return 0 }
+        return MacCoreBridge.uiHitTest(
+            point: CGPoint(x: p.x, y: bounds.height - p.y), size: bounds.size,
+            handle: Self.handle, resizeHandles: showResizeHandles)
     }
 }
 
@@ -519,19 +524,26 @@ final class OverlayBoxStore {
 
     func startTranslation() {
         for p in panels {
-            if p.mode == .hidden { p.showPanel() }
-            if p.mode == .editing || p.mode == .paused { p.enterWatching() }
+            p.applyUiInput(.start)
         }
     }
 
     func stopTranslation() {
-        for p in panels where p.mode == .watching || p.mode == .translating {
-            p.enterEditing()
-        }
+        for p in panels { p.applyUiInput(.stop) }
     }
 
     func toggleTranslation() {
         let active = panels.contains { $0.mode == .watching || $0.mode == .translating }
-        if active { stopTranslation() } else { startTranslation() }
+        for p in panels { p.applyUiInput(active ? .stop : .start) }
+    }
+
+    func refreshAppearance() {
+        for panel in panels { panel.refreshAppearance() }
+    }
+
+    func setPresentation(bilingual: Bool) {
+        for panel in panels {
+            panel.applyUiInput(bilingual ? .setBilingual : .setOverlay)
+        }
     }
 }

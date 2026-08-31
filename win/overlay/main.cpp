@@ -16,6 +16,7 @@
 #include "lenstrans/present.hpp"
 #include "lenstrans/present_layout.hpp"
 #include "lenstrans/settings.hpp"
+#include "lenstrans/ui_state.hpp"
 #include "win/app/model_download.hpp"
 #include "win/app/secrets.hpp"
 #include "win/app/ui.hpp"
@@ -57,7 +58,7 @@ constexpr UINT kTrayMsg = WM_APP + 1;
 constexpr UINT kPaintMsg = WM_APP + 2;
 constexpr UINT kHoverTimer = 1;
 
-enum class Hit { None, Drag, N, S, E, W, NE, NW, SE, SW };
+using Hit = lenstrans::UiAnchor;
 
 struct OverlayBox {
   HWND hwnd = nullptr;
@@ -193,19 +194,40 @@ void BlendRect(uint32_t* px, int stride, int x0, int y0, int x1, int y1, int w, 
   FillRectPx(px, stride, x0, y0, x1, y1, w, h, Premul(a, red, green, blue));
 }
 
-Hit HitTest(int x, int y, int w, int h) {
-  const bool nearL = x < kHandle, nearR = x >= w - kHandle, nearT = y < kHandle,
-             nearB = y >= h - kHandle;
-  if (nearT && nearL) return Hit::NW;
-  if (nearT && nearR) return Hit::NE;
-  if (nearB && nearL) return Hit::SW;
-  if (nearB && nearR) return Hit::SE;
-  if (nearT) return Hit::N;
-  if (nearB) return Hit::S;
-  if (nearL) return Hit::W;
-  if (nearR) return Hit::E;
-  if (y < kDragBarH) return Hit::Drag;
-  return Hit::None;
+void BlendRoundedRect(uint32_t* px, int stride, int x0, int y0, int x1, int y1,
+                      int w, int h, int radius, uint8_t a,
+                      uint8_t red, uint8_t green, uint8_t blue) {
+  radius = std::max(0, std::min(radius, std::min((x1 - x0) / 2, (y1 - y0) / 2)));
+  const uint32_t color = Premul(a, red, green, blue);
+  for (int y = std::max(0, y0); y < std::min(h, y1); ++y) {
+    for (int x = std::max(0, x0); x < std::min(w, x1); ++x) {
+      const int dx = x < x0 + radius ? x0 + radius - x
+                    : x >= x1 - radius ? x - (x1 - radius - 1) : 0;
+      const int dy = y < y0 + radius ? y0 + radius - y
+                    : y >= y1 - radius ? y - (y1 - radius - 1) : 0;
+      if (dx == 0 || dy == 0 || dx * dx + dy * dy <= radius * radius) px[y * stride + x] = color;
+    }
+  }
+}
+
+void ScalePremultipliedAlpha(uint32_t* px, std::size_t count, float alpha) {
+  const float scale = std::max(0.0f, std::min(1.0f, alpha));
+  if (scale >= 0.999f) return;
+  for (std::size_t i = 0; i < count; ++i) {
+    const uint32_t value = px[i];
+    const auto scaled = [scale](uint32_t channel) {
+      return static_cast<uint32_t>(std::round(channel * scale));
+    };
+    px[i] = (scaled((value >> 24) & 0xff) << 24) |
+            (scaled((value >> 16) & 0xff) << 16) |
+            (scaled((value >> 8) & 0xff) << 8) | scaled(value & 0xff);
+  }
+}
+
+Hit HitTest(int x, int y, int w, int h, bool resize_handles) {
+  return lenstrans::HitTestUiAnchor(static_cast<float>(x), static_cast<float>(y),
+                                    static_cast<float>(w), static_cast<float>(h),
+                                    static_cast<float>(kHandle), resize_handles);
 }
 
 LPCWSTR CursorFor(Hit hit) {
@@ -222,7 +244,7 @@ LPCWSTR CursorFor(Hit hit) {
     case Hit::NW:
     case Hit::SE:
       return IDC_SIZENWSE;
-    case Hit::Drag:
+    case Hit::Move:
       return IDC_SIZEALL;
     default:
       return IDC_ARROW;
@@ -379,7 +401,7 @@ void DrawUtf8(HDC hdc, int x, int y, int w, int h, const std::string& utf8, COLO
 }
 
 void DrawUtf8Fit(HDC hdc, int x, int y, int w, int h, const std::string& utf8, COLORREF color,
-                 int preferred_px) {
+                 int preferred_px, int font_weight = 400) {
   if (utf8.empty() || w <= 2 || h <= 2) return;
   const int n = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()), nullptr, 0);
   if (n <= 0) return;
@@ -389,7 +411,7 @@ void DrawUtf8Fit(HDC hdc, int x, int y, int w, int h, const std::string& utf8, C
   HFONT chosen = nullptr;
   int chosen_px = 8;
   for (int px = upper; px >= 8; --px) {
-    HFONT f = CreateFontW(-px, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+    HFONT f = CreateFontW(-px, 0, 0, 0, font_weight, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                           OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                           DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
     if (!f) continue;
@@ -406,7 +428,7 @@ void DrawUtf8Fit(HDC hdc, int x, int y, int w, int h, const std::string& utf8, C
     DeleteObject(f);
   }
   if (!chosen) {
-    chosen = CreateFontW(-chosen_px, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+    chosen = CreateFontW(-chosen_px, 0, 0, 0, font_weight, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                          OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                          DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
   }
@@ -416,7 +438,12 @@ void DrawUtf8Fit(HDC hdc, int x, int y, int w, int h, const std::string& utf8, C
   SetBkMode(hdc, TRANSPARENT);
   SetTextColor(hdc, color);
   IntersectClipRect(hdc, x, y, x + w, y + h);
-  RECT rc{x, y, x + w, y + h};
+  RECT measured{x, y, x + w, y + h};
+  DrawTextW(hdc, ws.c_str(), n, &measured,
+            DT_LEFT | DT_WORDBREAK | DT_NOPREFIX | DT_EDITCONTROL | DT_CALCRECT);
+  const int text_h = measured.bottom - measured.top;
+  const int draw_y = y + std::max(0, (h - text_h) / 2);
+  RECT rc{x, draw_y, x + w, y + h};
   DrawTextW(hdc, ws.c_str(), n, &rc,
             DT_LEFT | DT_WORDBREAK | DT_NOPREFIX | DT_EDITCONTROL);
   SelectObject(hdc, old);
@@ -443,6 +470,20 @@ void FixAlpha(uint32_t* px, int w, int h, int x0, int y0, int x1, int y1) {
   }
 }
 
+lenstrans::UiState CoreUiState(const OverlayBox* box) {
+  lenstrans::UiActivity activity = lenstrans::UiActivity::Stopped;
+  if (box) {
+    if (box->state == lenstrans::BoxState::Hidden)
+      activity = lenstrans::UiActivity::Hidden;
+    else if (box->state == lenstrans::BoxState::Paused)
+      activity = lenstrans::UiActivity::Paused;
+    else if (!box->editing)
+      activity = lenstrans::UiActivity::Active;
+  }
+  return {activity, g.settings.contrast ? lenstrans::UiPresentation::Bilingual
+                                        : lenstrans::UiPresentation::Overlay};
+}
+
 void PaintBox(OverlayBox* box) {
   if (!box || !box->hwnd) return;
   RECT rc{};
@@ -467,8 +508,12 @@ void PaintBox(OverlayBox* box) {
   HGDIOBJ old = SelectObject(mem, dib);
   auto* px = static_cast<uint32_t*>(bits);
   const bool editing = box->editing;
-  const uint8_t fill_a = editing ? 36 : static_cast<uint8_t>(std::max(2.f, g.settings.overlay_alpha * 255));
-  std::fill(px, px + static_cast<size_t>(w) * h, Premul(fill_a, 0, 0, 0));
+  const auto ui_visual = lenstrans::ResolveUiVisual(CoreUiState(box));
+  const uint8_t fill_a = editing
+                             ? static_cast<uint8_t>(ui_visual.editing_fill_alpha * 255)
+                             : static_cast<uint8_t>(std::max(2.f, g.settings.overlay_alpha * 255));
+  std::fill(px, px + static_cast<size_t>(w) * h,
+            Premul(fill_a, ui_visual.border.r, ui_visual.border.g, ui_visual.border.b));
 
   std::vector<lenstrans::OcrBlock> ocr, committed;
   std::vector<std::string> trans;
@@ -493,10 +538,6 @@ void PaintBox(OverlayBox* box) {
   const bool has_text = editing || has_text_locked;
   const float fade = editing ? 1.f : lenstrans::FadeOverlayAlpha(has_text, empty_ms);
 
-  if (!editing) {
-    FillRectPx(px, w, 1, 1, w - 1, std::min(kDragBarH, h - 1), w, h, Premul(38, 0, 0, 0));
-  }
-
   if (editing && diff.cols > 0 && diff.rows > 0) {
     const float cw = static_cast<float>(w) / diff.cols;
     const float ch = static_cast<float>(h) / diff.rows;
@@ -520,8 +561,9 @@ void PaintBox(OverlayBox* box) {
     const int target_h = contrast ? std::max(8, bh * 2 / 3) : bh;
     const uint8_t fill_alpha = static_cast<uint8_t>(std::round(
         std::max(0.0f, std::min(1.0f, p.background_alpha)) * 255.0f));
-    BlendRect(px, w, x, y, x + bw, y + bh, w, h, fill_alpha,
-              static_cast<uint8_t>(br), static_cast<uint8_t>(bg), static_cast<uint8_t>(bb));
+    BlendRoundedRect(px, w, x, y, x + bw, y + bh, w, h,
+                     static_cast<int>(std::round(p.corner_radius)), fill_alpha,
+                     static_cast<uint8_t>(br), static_cast<uint8_t>(bg), static_cast<uint8_t>(bb));
     const auto text_color = lenstrans::AccessibleTextColor(p.source.background);
     const int tr = text_color.r, tg = text_color.g, tb = text_color.b;
     std::string joined;
@@ -529,11 +571,14 @@ void PaintBox(OverlayBox* box) {
       if (i) joined += '\n';
       joined += p.lines[i];
     }
-    DrawUtf8Fit(mem, x + 4, y + 2, bw - 8, target_h - 4, joined, RGB(tr, tg, tb),
-                static_cast<int>(std::round(p.font_px)));
+    const int inset_x = static_cast<int>(std::round(p.text_inset_x));
+    const int inset_y = static_cast<int>(std::round(p.text_inset_y));
+    DrawUtf8Fit(mem, x + inset_x, y + inset_y, bw - inset_x * 2,
+                target_h - inset_y * 2, joined, RGB(tr, tg, tb),
+                static_cast<int>(std::round(p.font_px)), p.font_weight);
     if (contrast) {
       DrawUtf8Fit(mem, x + 4, y + target_h, bw - 8, bh - target_h - 2, p.source.text,
-                  RGB(200, 200, 200), std::max(8, static_cast<int>(p.font_px * 0.55f)));
+                  RGB(200, 200, 200), std::max(8, static_cast<int>(p.font_px * 0.55f)), 400);
     }
     FixAlpha(px, w, h, x, y, x + bw, y + bh);
   };
@@ -551,13 +596,16 @@ void PaintBox(OverlayBox* box) {
     }
   }
 
-  const uint32_t border = Premul(editing ? 160 : 80, 128, 128, 128);
-  FillRectPx(px, w, 0, 0, w, 1, w, h, border);
-  FillRectPx(px, w, 0, h - 1, w, h, w, h, border);
-  FillRectPx(px, w, 0, 0, 1, h, w, h, border);
-  FillRectPx(px, w, w - 1, 0, w, h, w, h, border);
-  if (editing) {
-    FillRectPx(px, w, 1, 1, w - 1, kDragBarH, w, h, Premul(50, 0, 0, 0));
+  // Fade translated content, then draw the state border at full visibility.
+  ScalePremultipliedAlpha(px, static_cast<std::size_t>(w) * h, fade);
+  const uint32_t border = Premul(230, ui_visual.border.r, ui_visual.border.g,
+                                 ui_visual.border.b);
+  const int border_w = ui_visual.show_resize_handles ? 1 : 2;
+  FillRectPx(px, w, 0, 0, w, border_w, w, h, border);
+  FillRectPx(px, w, 0, h - border_w, w, h, w, h, border);
+  FillRectPx(px, w, 0, 0, border_w, h, w, h, border);
+  FillRectPx(px, w, w - border_w, 0, w, h, w, h, border);
+  if (ui_visual.show_resize_handles) {
     const int hs[8][2] = {{0, 0},
                           {(w - kHandle) / 2, 0},
                           {w - kHandle, 0},
@@ -567,22 +615,12 @@ void PaintBox(OverlayBox* box) {
                           {(w - kHandle) / 2, h - kHandle},
                           {w - kHandle, h - kHandle}};
     for (auto& p : hs)
-      FillRectPx(px, w, p[0], p[1], p[0] + kHandle, p[1] + kHandle, w, h, Premul(230, 0, 120, 212));
-    uint8_t sr = 80, sg = 80, sb = 80;
-    if (box->state == lenstrans::BoxState::Translating) {
-      sr = 220;
-      sg = 180;
-      sb = 40;
-    } else if (box->state == lenstrans::BoxState::Watching) {
-      sr = 40;
-      sg = 180;
-      sb = 80;
-    } else if (box->state == lenstrans::BoxState::Paused) {
-      sr = 140;
-      sg = 140;
-      sb = 140;
-    }
-    FillRectPx(px, w, w - 14, 6, w - 6, 14, w, h, Premul(255, sr, sg, sb));
+      FillRectPx(px, w, p[0], p[1], p[0] + kHandle, p[1] + kHandle, w, h, border);
+  } else if (ui_visual.show_corner_markers) {
+    constexpr int dot = 8;
+    const int corners[4][2] = {{0, 0}, {w - dot, 0}, {0, h - dot}, {w - dot, h - dot}};
+    for (const auto& p : corners)
+      FillRectPx(px, w, p[0], p[1], p[0] + dot, p[1] + dot, w, h, border);
   }
 
   if (!editing && fade > 0.f && lenstrans::HoverArmed(hover_ms) && hover_i >= 0 &&
@@ -610,7 +648,7 @@ void PaintBox(OverlayBox* box) {
   SIZE size{w, h};
   BLENDFUNCTION blend{};
   blend.BlendOp = AC_SRC_OVER;
-  blend.SourceConstantAlpha = static_cast<BYTE>(std::max(0.f, std::min(255.f, fade * 255.f)));
+  blend.SourceConstantAlpha = 255;
   blend.AlphaFormat = AC_SRC_ALPHA;
   UpdateLayeredWindow(box->hwnd, screen, nullptr, &size, mem, &ptSrc, 0, &blend, ULW_ALPHA);
   SelectObject(mem, old);
@@ -630,58 +668,39 @@ void SetEditing(OverlayBox* box, bool editing) {
   PaintBox(box);
 }
 
+void ApplyCoreUiInput(OverlayBox* box, lenstrans::UiInput input) {
+  if (!box) return;
+  const auto next = lenstrans::ApplyUiInput(CoreUiState(box), input).state;
+  g.settings.contrast = next.presentation == lenstrans::UiPresentation::Bilingual;
+  switch (next.activity) {
+    case lenstrans::UiActivity::Hidden:
+      box->state = lenstrans::BoxState::Hidden;
+      ShowWindow(box->hwnd, SW_HIDE);
+      break;
+    case lenstrans::UiActivity::Stopped:
+      SetEditing(box, true);
+      break;
+    case lenstrans::UiActivity::Active:
+      SetEditing(box, false);
+      break;
+    case lenstrans::UiActivity::Paused:
+      box->editing = false;
+      box->state = lenstrans::BoxState::Paused;
+      PaintBox(box);
+      break;
+  }
+}
+
 void ApplyHitMove(OverlayBox* box, int mx, int my) {
-  RECT r = box->start;
-  const int dx = mx - box->grab.x;
-  const int dy = my - box->grab.y;
-  switch (box->hit) {
-    case Hit::Drag:
-      OffsetRect(&r, dx, dy);
-      break;
-    case Hit::N:
-      r.top += dy;
-      break;
-    case Hit::S:
-      r.bottom += dy;
-      break;
-    case Hit::W:
-      r.left += dx;
-      break;
-    case Hit::E:
-      r.right += dx;
-      break;
-    case Hit::NW:
-      r.left += dx;
-      r.top += dy;
-      break;
-    case Hit::NE:
-      r.right += dx;
-      r.top += dy;
-      break;
-    case Hit::SW:
-      r.left += dx;
-      r.bottom += dy;
-      break;
-    case Hit::SE:
-      r.right += dx;
-      r.bottom += dy;
-      break;
-    default:
-      return;
-  }
-  if (r.right - r.left < kMinSize) {
-    if (box->hit == Hit::W || box->hit == Hit::NW || box->hit == Hit::SW)
-      r.left = r.right - kMinSize;
-    else
-      r.right = r.left + kMinSize;
-  }
-  if (r.bottom - r.top < kMinSize) {
-    if (box->hit == Hit::N || box->hit == Hit::NW || box->hit == Hit::NE)
-      r.top = r.bottom - kMinSize;
-    else
-      r.bottom = r.top + kMinSize;
-  }
-  SetWindowPos(box->hwnd, HWND_TOPMOST, r.left, r.top, r.right - r.left, r.bottom - r.top,
+  const auto r = lenstrans::ApplyUiDrag(
+      {static_cast<float>(box->start.left), static_cast<float>(box->start.top),
+       static_cast<float>(box->start.right - box->start.left),
+       static_cast<float>(box->start.bottom - box->start.top)},
+      box->hit, static_cast<float>(mx - box->grab.x), static_cast<float>(my - box->grab.y),
+      static_cast<float>(kMinSize), static_cast<float>(kMinSize));
+  SetWindowPos(box->hwnd, HWND_TOPMOST, static_cast<int>(std::round(r.x)),
+               static_cast<int>(std::round(r.y)), static_cast<int>(std::round(r.w)),
+               static_cast<int>(std::round(r.h)),
                SWP_NOACTIVATE | SWP_NOOWNERZORDER);
   RECT client{};
   GetClientRect(box->hwnd, &client);
@@ -751,35 +770,61 @@ void EnsureEngines() {
 
 void TranslateCommitted(OverlayBox* box, const std::vector<lenstrans::OcrBlock>& blocks) {
   EnsureEngines();
-  std::vector<std::string> outs(blocks.size());
   box->state = lenstrans::BoxState::Translating;
-  for (size_t i = 0; i < blocks.size(); ++i) {
-    lenstrans::TranslateRequest req;
-    req.text = blocks[i].text;
-    req.src_lang = box->src_lang.empty() ? g.settings.src_lang : box->src_lang;
-    req.tgt_lang = box->tgt_lang.empty() ? g.settings.tgt_lang : box->tgt_lang;
-    req.quality = g.settings.quality;
-    lenstrans::Settings per = g.settings;
-    per.engine = box->engine;
-    per.render = box->render;
-    per.src_lang = req.src_lang;
-    per.tgt_lang = req.tgt_lang;
-    const auto r = lenstrans::DispatchTranslate(per, g.local.get(), g.cloud.get(), &g.cache, req);
-    if (r.from_cache) LogA("CACHE hit\n");
-    if (!r.error.empty()) LogA(std::string("TR err ") + r.error + "\n");
-    if (g.e2e_llama) {
-      char tline[160];
-      std::snprintf(tline, sizeof(tline), "TR first_token_ms=%d latency_ms=%d beam=%d\n",
-                    r.first_token_ms, r.latency_ms, r.beam_width);
-      LogA(tline);
-      if (g.e2e_first_token_ms < 0 && r.error.empty()) {
-        g.e2e_first_token_ms = r.first_token_ms;
-        g.e2e_latency_ms = r.latency_ms;
-        g.e2e_sample_src = blocks[i].text;
-        g.e2e_sample_hyp = r.text;
-      }
+  lenstrans::TranslateRequest req;
+  req.text = lenstrans::BuildBatchSource(blocks);
+  req.src_lang = box->src_lang.empty() ? g.settings.src_lang : box->src_lang;
+  req.tgt_lang = box->tgt_lang.empty() ? g.settings.tgt_lang : box->tgt_lang;
+  req.quality = g.settings.quality;
+  req.batch_protocol = true;
+  lenstrans::Settings per = g.settings;
+  per.engine = box->engine;
+  per.render = box->render;
+  per.src_lang = req.src_lang;
+  per.tgt_lang = req.tgt_lang;
+  const auto result = lenstrans::DispatchTranslate(
+      per, g.local.get(), g.cloud.get(), &g.cache, req);
+  if (result.from_cache) LogA("CACHE batch hit\n");
+  if (!result.error.empty()) LogA(std::string("TR batch err ") + result.error + "\n");
+  if (g.e2e_llama) {
+    char tline[160];
+    std::snprintf(tline, sizeof(tline),
+                  "TR batch blocks=%zu first_token_ms=%d latency_ms=%d beam=%d\n",
+                  blocks.size(), result.first_token_ms, result.latency_ms, result.beam_width);
+    LogA(tline);
+    if (g.e2e_first_token_ms < 0 && result.error.empty()) {
+      g.e2e_first_token_ms = result.first_token_ms;
+      g.e2e_latency_ms = result.latency_ms;
+      g.e2e_sample_src = req.text;
+      g.e2e_sample_hyp = result.text;
     }
-    outs[i] = r.text;
+  }
+  auto outs = lenstrans::ParseBatchTranslation(result.text, blocks.size());
+  bool batch_usable = lenstrans::BatchTranslationUsable(blocks, result.text);
+  constexpr std::size_t kBatchFallbackGroup = 3;
+  if (!batch_usable && blocks.size() > kBatchFallbackGroup) {
+    std::size_t usable_groups = 0;
+    const auto ranges = lenstrans::BatchRanges(blocks.size(), kBatchFallbackGroup);
+    for (const auto& range : ranges) {
+      const std::vector<lenstrans::OcrBlock> group(blocks.begin() + range.first,
+                                                   blocks.begin() + range.second);
+      lenstrans::TranslateRequest group_req = req;
+      group_req.text = lenstrans::BuildBatchSource(group);
+      const auto group_result = lenstrans::DispatchTranslate(
+          per, g.local.get(), g.cloud.get(), &g.cache, group_req);
+      if (lenstrans::BatchTranslationUsable(group, group_result.text)) ++usable_groups;
+      const auto parsed = lenstrans::ParseBatchTranslation(group_result.text, group.size());
+      for (std::size_t i = 0; i < parsed.size(); ++i) outs[range.first + i] = parsed[i];
+    }
+    batch_usable = lenstrans::BatchFallbackUsable(ranges.size(), usable_groups);
+    LogA("TR batch fallback groups=" +
+         std::to_string(ranges.size()) + " usable=" + std::to_string(usable_groups) + "\n");
+  }
+  if (!batch_usable && !(g.e2e_sec > 0 && !g.e2e_llama)) {
+    LogA("TR batch unusable: refusing coordinate-misaligned paint\n");
+    return;
+  }
+  for (size_t i = 0; i < blocks.size(); ++i) {
     const auto mode =
         lenstrans::DecidePresent(blocks[i].bg_variance, g.settings.contrast, box->render);
     const char* mn = mode == lenstrans::PresentMode::Immersive
@@ -791,7 +836,7 @@ void TranslateCommitted(OverlayBox* box, const std::vector<lenstrans::OcrBlock>&
     char pline[384];
     std::snprintf(pline, sizeof(pline),
                   "PRESENT mode=%s cover=%d show_source=%d stack=0 src=\"%s\" hyp=\"%s\" var=%.1f\n",
-                  mn, cover ? 1 : 0, show_source ? 1 : 0, blocks[i].text.c_str(), r.text.c_str(),
+                  mn, cover ? 1 : 0, show_source ? 1 : 0, blocks[i].text.c_str(), outs[i].c_str(),
                   blocks[i].bg_variance);
     LogA(pline);
     g.e2e_present = mn;
@@ -801,7 +846,7 @@ void TranslateCommitted(OverlayBox* box, const std::vector<lenstrans::OcrBlock>&
       box->e2e_saw_cover = true;
       LogA("COVER_OK overlay_opaque_fill stack=0 not_translucent_overprint\n");
     }
-    if (!r.text.empty()) ++g.e2e_tr;
+    if (!outs[i].empty()) ++g.e2e_tr;
   }
   {
     std::lock_guard<std::mutex> lock(box->mu);
@@ -1094,6 +1139,14 @@ void OnTray(lenstrans::win::TrayCmd cmd) {
                 sh / 3 - kDefaultH / 2, kDefaultW, kDefaultH, true);
       break;
     }
+    case lenstrans::win::TrayCmd::ToggleTranslation: {
+      const bool active = std::any_of(g.boxes.begin(), g.boxes.end(), [](const auto& b) {
+        return b && !b->editing && b->state != lenstrans::BoxState::Paused;
+      });
+      for (auto& b : g.boxes)
+        ApplyCoreUiInput(b.get(), active ? lenstrans::UiInput::Stop : lenstrans::UiInput::Start);
+      break;
+    }
     case lenstrans::win::TrayCmd::Pause:
       g.paused = !g.paused.load();
       for (auto& b : g.boxes) {
@@ -1123,10 +1176,10 @@ void OnTray(lenstrans::win::TrayCmd cmd) {
       g.settings.tgt_lang = "ko";
       break;
     case lenstrans::win::TrayCmd::ModeTrans:
-      g.settings.contrast = false;
+      for (auto& b : g.boxes) ApplyCoreUiInput(b.get(), lenstrans::UiInput::SetOverlay);
       break;
     case lenstrans::win::TrayCmd::ModeContrast:
-      g.settings.contrast = true;
+      for (auto& b : g.boxes) ApplyCoreUiInput(b.get(), lenstrans::UiInput::SetBilingual);
       break;
     case lenstrans::win::TrayCmd::Autostart:
       lenstrans::win::SetAutostart(!lenstrans::win::AutostartEnabled());
@@ -1179,24 +1232,25 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
       return 0;
     case WM_LBUTTONDOWN: {
       if (!box) return 0;
-      box->hit = HitTest(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam), box->width, box->height);
-      if (box->editing) {
-        if (box->hit == Hit::None) return 0;
-      } else {
-        // In viewing mode any interior point moves the box; this avoids an invisible
-        // drag strip and keeps the hit target stable over translated text.
-        box->hit = Hit::Drag;
-      }
+      const auto visual = lenstrans::ResolveUiVisual(CoreUiState(box));
+      box->hit = HitTest(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam), box->width, box->height,
+                         visual.show_resize_handles);
+      if (box->hit == Hit::None) return 0;
       SetCapture(hwnd);
       box->dragging = true;
       GetWindowRect(hwnd, &box->start);
       GetCursorPos(&box->grab);
       return 0;
     }
+    case WM_LBUTTONDBLCLK:
+      if (box) ApplyCoreUiInput(box, lenstrans::UiInput::LeftDoubleClick);
+      return 0;
     case WM_MOUSEMOVE: {
       if (box && !box->dragging) {
-        SetCursor(LoadCursorW(nullptr, CursorFor(HitTest(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam),
-                                                         box->width, box->height))));
+        const auto visual = lenstrans::ResolveUiVisual(CoreUiState(box));
+        SetCursor(LoadCursorW(nullptr, CursorFor(HitTest(
+            GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam), box->width, box->height,
+            visual.show_resize_handles))));
       }
       if (!box || !box->dragging) return 0;
       POINT p{};
@@ -1210,6 +1264,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         box->dragging = false;
         box->hit = Hit::None;
       }
+      return 0;
+    case WM_RBUTTONUP:
+      if (box) ApplyCoreUiInput(box, lenstrans::UiInput::RightClick);
       return 0;
     case WM_CAPTURECHANGED:
       if (box && box->dragging) {
@@ -1740,6 +1797,7 @@ int Run() {
 
   WNDCLASSEXW wc{};
   wc.cbSize = sizeof(wc);
+  wc.style = CS_DBLCLKS;
   wc.lpfnWndProc = WndProc;
   wc.hInstance = GetModuleHandleW(nullptr);
   wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
@@ -1759,7 +1817,6 @@ int Run() {
   g.hooks.on_tray = [](lenstrans::win::TrayCmd c) { OnTray(c); };
   g.hooks.on_settings_saved = [] {
     EnsureEngines();
-    RegisterAppHotkeys();
     g.hooks.cache_entries = g.cache.Size();
     g.hooks.cache_bytes = g.cache.Bytes();
   };
@@ -1774,9 +1831,8 @@ int Run() {
       AllocConsole();
       SetConsoleTitleW(L"LensTrans");
     }
-    LogA("LensTrans\n  Ctrl+E edit/click-through  Ctrl+Shift+L new box\n"
-         "  Ctrl+T pause  Ctrl+Shift+H hide  Ctrl+, settings  Esc quit\n"
-         "Watching: immersive fill or sticker only. Ctrl+, settings persist.\n");
+    LogA("LensTrans\n  right click: start/stop  double left click: overlay/bilingual\n"
+         "  left drag: move; edge drag: resize; Esc quit\n");
   }
 
   if (!probe && !e2e_ui && !e2e_hotkey_probe && !g.skip_onboard && lenstrans::win::FirstRun()) {
@@ -1869,7 +1925,6 @@ int Run() {
     }
     if (!e2e_ui) {
       lenstrans::win::InitTray(g.hidden, g.hooks);
-      RegisterAppHotkeys();
       if (!e2e_hotkey_probe) {
         EnsureEngines();
         g.worker = std::thread(WorkerLoop);

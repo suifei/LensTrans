@@ -11,6 +11,7 @@ struct MacTranslateRequest: Sendable {
     var srcLang: String = "auto"
     var tgtLang: String = "zh"
     var quality: Bool = false
+    var batchProtocol: Bool = false
 }
 
 struct MacTranslateResult: Sendable {
@@ -92,12 +93,17 @@ final class MacLocalEngine: MacEngine {
             r.error = "local model missing"
             return r
         }
-        guard let prompt = MacCoreBridge.prompt(text: req.text, sourceLanguage: req.srcLang,
-                                                targetLanguage: req.tgtLang) else {
+        let prompt = req.batchProtocol
+            ? MacCoreBridge.batchPrompt(source: req.text, sourceLanguage: req.srcLang,
+                                        targetLanguage: req.tgtLang,
+                                        chatWrapped: true)
+            : MacCoreBridge.prompt(text: req.text, sourceLanguage: req.srcLang,
+                                   targetLanguage: req.tgtLang)
+        guard let prompt else {
             r.error = "core prompt build failed"
             return r
         }
-        let maxNew = req.quality ? 96 : 48
+        let maxNew = req.batchProtocol ? (req.quality ? 512 : 384) : (req.quality ? 96 : 48)
 
         // 1) Prefer in-process Metal.
         if LlamaInProcess.available {
@@ -115,7 +121,7 @@ final class MacLocalEngine: MacEngine {
         }
         let t0 = Date()
         do {
-            let out = try Self.runCli(cli: cli, model: modelPath, prompt: prompt)
+            let out = try Self.runCli(cli: cli, model: modelPath, prompt: prompt, maxNew: maxNew)
             r.text = LocalPromptLogic.stripThink(out)
             r.latencyMs = Int(Date().timeIntervalSince(t0) * 1000)
             r.backend = "cli"
@@ -170,7 +176,7 @@ final class MacLocalEngine: MacEngine {
         return r
     }
 
-    private static func runCli(cli: String, model: String, prompt: String) throws -> String {
+    private static func runCli(cli: String, model: String, prompt: String, maxNew: Int) throws -> String {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("lenstrans-prompt-\(UUID().uuidString).txt")
         try prompt.write(to: tmp, atomically: true, encoding: .utf8)
@@ -183,8 +189,8 @@ final class MacLocalEngine: MacEngine {
         var args = [
             "-m", model,
             "-f", tmp.path,
-            "-n", "96",
-            "-c", "1024",
+            "-n", String(maxNew),
+            "-c", maxNew > 96 ? "4096" : "1024",
             "--batch-size", "512",
             "-ngl", "99",
             "--temp", "0",
@@ -248,7 +254,12 @@ final class MacCloudEngine: MacEngine {
             return r
         }
         let prompt: String
-        if req.tgtLang == "zh" || req.tgtLang == "zh-CN" {
+        if req.batchProtocol,
+           let batch = MacCoreBridge.batchPrompt(source: req.text, sourceLanguage: req.srcLang,
+                                                 targetLanguage: req.tgtLang,
+                                                 chatWrapped: false) {
+            prompt = batch
+        } else if req.tgtLang == "zh" || req.tgtLang == "zh-CN" {
             prompt = "英译简体中文。习语按含义意译，勿逐字直译。输出完整且简洁的译文，不要解释。\n\n" + req.text
         } else {
             prompt = "Translate the following segment into \(req.tgtLang), without additional explanation.\n\n" + req.text

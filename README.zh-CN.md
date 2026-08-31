@@ -27,14 +27,14 @@
   │    │                                              │  │
   │    └──────────────────────────────────────────────┘  │
   └──────────────────────────────────────────────────────┘
-         托盘  ·  Ctrl+E 编辑 / 穿透  ·  Esc 退出
+         托盘  ·  右键开始/停止  ·  左键双击切换模式
 ```
 
 框是 `WS_POPUP` 分层 HWND（`WS_EX_LAYERED | TOPMOST | TOOLWINDOW`），不占任务栏。**Watching** 打开 `WS_EX_TRANSPARENT`，鼠标落到下层窗口。**Editing** 清掉穿透，可拖顶栏、八向 12px 把手缩放。支持多框，每框自己的状态机：
 
 ```
 Hidden → Editing → Watching ⇄ Translating
-              Paused ← 任意态（热键；停捕获，浮层留最后一帧）
+              Paused ← 托盘暂停（停捕获，浮层留最后一帧）
 ```
 
 呈现只允许两种诚实做法：用背景众数色填矩形再写译文（沉浸），或用不透明贴条盖住原文。禁止「原文还在、半透明字叠上去」。对照模式是贴条下面加 60% 字号原文，不是叠字。字色相对填色低于 WCAG AA 4.5:1 时，字色改成填色反色。
@@ -46,7 +46,7 @@ Hidden → Editing → Watching ⇄ Translating
 | | 常见弹窗工具 | LensTrans |
 | --- | --- | --- |
 | 位置 | 另开一窗，离开原文 | 框钉在你画出的像素上 |
-| 时机 | 热键截一次 | 框内画面变化就更新 |
+| 时机 | 单次截取 | 框内画面变化就更新 |
 | 离线 | 往往要联网 | 默认本地 Qwen2.5-0.5B |
 | 观感 | 原文和译文同时看见 | 沉浸填色或贴条 **盖住** 原文 |
 
@@ -64,7 +64,7 @@ Hidden → Editing → Watching ⇄ Translating
 | 云端翻译 | WinHTTP `POST {base}/chat/completions`。Base URL / Model / API Key **全部留空**，空则禁用 |
 | 密钥 | DPAPI 落盘；设置序列化里不得出现 `api_key`（有单测） |
 | 界面 | 设置 5 个 Tab、首次 3 步引导（引导阶段不拉起 WGC） |
-| 热键 | `Ctrl+E` 编辑/穿透 · `Ctrl+Shift+L` 新建框 · `Ctrl+T` 暂停 · `Ctrl+Shift+H` 全隐 · `Ctrl+,` 设置 |
+| 鼠标 | 右键开始/停止 · 左键双击切换覆盖/双语 · 框内拖动移动 · 边缘拖动缩放 |
 
 ## 快速开始
 
@@ -72,7 +72,7 @@ Hidden → Editing → Watching ⇄ Translating
 
 1. 克隆本仓库。按 [编译](#编译) 拉 llama.cpp **b10688**，按 [models/README.md](models/README.md) 下载 GGUF。
 2. 编出 `lenstrans_overlay`，运行 `build\Release\lenstrans_overlay.exe`。
-3. 若弹出屏幕录制权限，点允许。把框拉到英文界面上。`Ctrl+E` 切到穿透后再点下层。
+3. 若弹出屏幕录制权限，点允许。把框拉到待翻译文字上，在框内单击右键开始翻译。
 4. 要用云端：打开设置，自己填 Base URL、模型名、Key。源码不预填任何网关。
 
 脚本打包（不是 Inno / NSIS / 商店签名包）见 [docs/installer.md](docs/installer.md)。本树没有可上架的生产签名 MSIX。

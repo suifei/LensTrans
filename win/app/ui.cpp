@@ -144,7 +144,7 @@ constexpr int kOnbCancel = 704;
 
 struct SettingsUi {
   HWND tabs = nullptr;
-  HWND pages[5]{};
+  HWND pages[4]{};
   AppHooks* hooks = nullptr;
   HWND hk_lbl[5]{};
   int hk_mod[5]{};
@@ -198,7 +198,7 @@ void PollHotkeyCapture(HWND hwnd, SettingsUi* ui) {
 }
 
 void ShowPage(SettingsUi* ui, int i) {
-  for (int p = 0; p < 5; ++p) {
+  for (int p = 0; p < 4; ++p) {
     if (ui->pages[p]) ShowWindow(ui->pages[p], p == i ? SW_SHOW : SW_HIDE);
   }
 }
@@ -235,16 +235,6 @@ void Collect(HWND dlg, SettingsUi* ui) {
   s.sticker_alpha = std::max(60, std::min(100, _wtoi(buf)));
   GetWindowTextW(GetDlgItem(p2, kScale), buf, 32);
   s.font_scale = std::max(80, std::min(150, _wtoi(buf)));
-  s.mod_new = ui->hk_mod[0];
-  s.vk_new = ui->hk_vk[0];
-  s.mod_edit = ui->hk_mod[1];
-  s.vk_edit = ui->hk_vk[1];
-  s.mod_pause = ui->hk_mod[2];
-  s.vk_pause = ui->hk_vk[2];
-  s.mod_hide = ui->hk_mod[3];
-  s.vk_hide = ui->hk_vk[3];
-  s.mod_settings = ui->hk_mod[4];
-  s.vk_settings = ui->hk_vk[4];
   const std::string key_path = ConfigPath("api_key.dpapi");
   if (!key_path.empty()) ProtectToFile(key_path, ui->hooks->api_key ? *ui->hooks->api_key : "");
   WriteConfigFile("settings.cfg", lenstrans::SerializeSettings(s));
@@ -333,11 +323,12 @@ void ShowTrayMenu(HWND hwnd, AppHooks& hooks) {
   POINT pt{};
   GetCursorPos(&pt);
   HMENU m = CreatePopupMenu();
-  AppendMenuW(m, MF_STRING, static_cast<UINT>(TrayCmd::ToggleBoxes), L"显示/隐藏全部翻译框\tCtrl+Shift+H");
-  AppendMenuW(m, MF_STRING, static_cast<UINT>(TrayCmd::NewBox), L"新建翻译框\tCtrl+Shift+L");
+  AppendMenuW(m, MF_STRING, static_cast<UINT>(TrayCmd::ToggleBoxes), L"显示/隐藏全部翻译框");
+  AppendMenuW(m, MF_STRING, static_cast<UINT>(TrayCmd::NewBox), L"新建翻译框");
   AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+  AppendMenuW(m, MF_STRING, static_cast<UINT>(TrayCmd::ToggleTranslation), L"开始/停止翻译");
   AppendMenuW(m, MF_STRING, static_cast<UINT>(TrayCmd::Pause),
-              hooks.paused ? L"继续翻译\tCtrl+T" : L"暂停翻译\tCtrl+T");
+              hooks.paused ? L"继续翻译" : L"暂停翻译");
   HMENU eng = CreatePopupMenu();
   AppendMenuW(eng, MF_STRING, static_cast<UINT>(TrayCmd::EngineLocal), L"本地（快）");
   AppendMenuW(eng, MF_STRING, static_cast<UINT>(TrayCmd::EngineCloud), L"云端（强）");
@@ -373,7 +364,7 @@ void ShowTrayMenu(HWND hwnd, AppHooks& hooks) {
   const bool auto_on = AutostartEnabled();
   if (hooks.settings) hooks.settings->autostart = auto_on;
   CheckMenu(m, static_cast<UINT>(TrayCmd::Autostart), auto_on);
-  AppendMenuW(m, MF_STRING, static_cast<UINT>(TrayCmd::Settings), L"设置…\tCtrl+,");
+  AppendMenuW(m, MF_STRING, static_cast<UINT>(TrayCmd::Settings), L"设置…");
   AppendMenuW(m, MF_STRING, static_cast<UINT>(TrayCmd::Update), L"检查更新");
   AppendMenuW(m, MF_STRING, static_cast<UINT>(TrayCmd::Quit), L"退出");
   SetForegroundWindow(hwnd);
@@ -408,15 +399,15 @@ void ShowSettingsWindow(HWND owner, AppHooks& hooks) {
   SendMessageW(ui->tabs, WM_SETFONT, reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
   TCITEMW it{};
   it.mask = TCIF_TEXT;
-  const wchar_t* names[] = {L"通用", L"翻译", L"呈现", L"热键", L"关于"};
-  for (int i = 0; i < 5; ++i) {
+  const wchar_t* names[] = {L"通用", L"翻译", L"呈现", L"关于"};
+  for (int i = 0; i < 4; ++i) {
     it.pszText = const_cast<wchar_t*>(names[i]);
     TabCtrl_InsertItem(ui->tabs, i, &it);
   }
   Settings s = hooks.settings ? *hooks.settings : Settings{};
   s.autostart = AutostartEnabled();
   if (hooks.settings) hooks.settings->autostart = s.autostart;
-  for (int i = 0; i < 5; ++i) {
+  for (int i = 0; i < 4; ++i) {
     ui->pages[i] = CreateWindowW(L"STATIC", L"", WS_CHILD, 16, 40, 430, 420, hwnd, nullptr,
                                  wc.hInstance, nullptr);
   }
@@ -448,29 +439,12 @@ void ShowSettingsWindow(HWND owner, AppHooks& hooks) {
   MakeLbl(p2, 8, 140, 160, 18, L"字号缩放 80–150");
   MakeEdit(p2, 180, 138, 60, 22, kScale, std::to_wstring(s.font_scale), false);
   HWND p3 = ui->pages[3];
-  ui->hk_mod[0] = s.mod_new;
-  ui->hk_vk[0] = s.vk_new;
-  ui->hk_mod[1] = s.mod_edit;
-  ui->hk_vk[1] = s.vk_edit;
-  ui->hk_mod[2] = s.mod_pause;
-  ui->hk_vk[2] = s.vk_pause;
-  ui->hk_mod[3] = s.mod_hide;
-  ui->hk_vk[3] = s.vk_hide;
-  ui->hk_mod[4] = s.mod_settings;
-  ui->hk_vk[4] = s.vk_settings;
-  MakeLbl(p3, 8, 8, 400, 36, L"点击「录入」后按下新组合。冲突会标在行上，仍可保存。冲突检测已做。");
-  for (int i = 0; i < 5; ++i) {
-    ui->hk_lbl[i] = MakeLbl(p3, 8, 50 + i * 48, 300, 22, L"");
-    MakeBtn(p3, 320, 46 + i * 48, 80, 26, kHkBtn0 + i, L"录入");
-  }
-  RefreshHkLabels(ui);
-  HWND p4 = ui->pages[4];
   wchar_t about[256];
   swprintf_s(about, L"LensTrans 0.2\n默认模型 Qwen2.5-0.5B Instruct Q4_K_M\n缓存 %zu 条 / %zu 字节\nApache-2.0 可覆盖 EU/UK/KR",
              hooks.cache_entries, hooks.cache_bytes);
-  MakeLbl(p4, 8, 8, 400, 80, about);
-  MakeBtn(p4, 8, 100, 120, 26, kClearCache, L"清理缓存");
-  MakeLbl(p4, 8, 140, 400, 40, L"诊断日志：控制台窗口。不落盘原文。");
+  MakeLbl(p3, 8, 8, 400, 80, about);
+  MakeBtn(p3, 8, 100, 120, 26, kClearCache, L"清理缓存");
+  MakeLbl(p3, 8, 140, 400, 40, L"诊断日志：控制台窗口。不落盘原文。");
   ShowPage(ui, 0);
   MakeBtn(hwnd, 260, 488, 80, 26, kOk, L"确定");
   MakeBtn(hwnd, 352, 488, 80, 26, kCancel, L"取消");

@@ -25,26 +25,9 @@ struct LensTransMacApp {
 
         app.setActivationPolicy(.accessory)
         _ = TrayController.shared
-        HotkeyCenter.shared.onNewBox = { _ = OverlayBoxStore.shared.createBox() }
-        HotkeyCenter.shared.onEditToggle = {
-            for p in OverlayBoxStore.shared.panels {
-                switch p.mode {
-                case .watching, .translating, .paused:
-                    p.enterEditing()
-                case .editing, .hidden:
-                    p.enterWatching()
-                }
-            }
-        }
-        HotkeyCenter.shared.onPause = { OverlayBoxStore.shared.pauseAll() }
-        HotkeyCenter.shared.onHideAll = { OverlayBoxStore.shared.toggleAllVisible() }
-        HotkeyCenter.shared.onSettings = { SettingsWindow.present() }
-        HotkeyCenter.shared.onTranslationStart = { OverlayBoxStore.shared.startTranslation() }
-        HotkeyCenter.shared.onTranslationStop = { OverlayBoxStore.shared.stopTranslation() }
-        HotkeyCenter.shared.installDefaults()
-
         TrayController.shared.onNewBox = { _ = OverlayBoxStore.shared.createBox() }
         TrayController.shared.onToggleBoxes = { OverlayBoxStore.shared.toggleAllVisible() }
+        TrayController.shared.onToggleTranslation = { OverlayBoxStore.shared.toggleTranslation() }
         TrayController.shared.onPause = { OverlayBoxStore.shared.pauseAll() }
 
         let startWatching = argv.contains("--start-watching")

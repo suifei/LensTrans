@@ -89,7 +89,7 @@ class LlamaEngine final : public IEngine {
     model_ = llama_model_load_from_file(path_.c_str(), mp);
     if (!model_) return false;
     auto cp = llama_context_default_params();
-    cp.n_ctx = 1024;
+    cp.n_ctx = 4096;
     cp.n_batch = 512;
     ctx_ = llama_init_from_model(model_, cp);
     if (!ctx_) {
@@ -126,11 +126,16 @@ class LlamaEngine final : public IEngine {
     }
     tokens.resize(static_cast<std::size_t>(n));
     const int n_vocab = llama_vocab_n_tokens(vocab);
-    const int max_new = req.quality ? 96 : 48;
+    const int max_new = req.batch_protocol ? (req.quality ? 512 : 384) : (req.quality ? 96 : 48);
     auto decode_prompt = [&]() -> bool {
       llama_memory_clear(llama_get_memory(ctx_), true);
-      llama_batch batch = llama_batch_get_one(tokens.data(), n);
-      return llama_decode(ctx_, batch) == 0;
+      constexpr int kPromptChunk = 512;
+      for (int offset = 0; offset < n; offset += kPromptChunk) {
+        const int count = (std::min)(kPromptChunk, n - offset);
+        llama_batch batch = llama_batch_get_one(tokens.data() + offset, count);
+        if (llama_decode(ctx_, batch) != 0) return false;
+      }
+      return true;
     };
     auto piece = [&](llama_token id) {
       char buf[256];
@@ -250,8 +255,11 @@ class CliEngine final : public IEngine {
     r.engine = EngineKind::Local;
     const auto t0 = std::chrono::steady_clock::now();
     const std::string prompt = BuildTranslatePrompt(req);
+    const int max_new = req.batch_protocol ? (req.quality ? 512 : 384) : 96;
     std::string cmd = "\"" + cli_ + "\" -m \"" + model_ + "\" -p \"" + prompt +
-                      "\" -n 96 -c 1024 --batch-size 512 -ngl 0 --temp 0 -no-cnv --log-disable";
+                      "\" -n " + std::to_string(max_new) +
+                      " -c " + std::string(req.batch_protocol ? "4096" : "1024") +
+                      " --batch-size 512 -ngl 0 --temp 0 -no-cnv --log-disable";
     SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
     HANDLE rd = nullptr, wr = nullptr;
     CreatePipe(&rd, &wr, &sa, 0);
