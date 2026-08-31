@@ -28,7 +28,7 @@ LOG="$OUT/mac-smoke-$STAMP.txt"
     echo "llama=MISSING (local engine will report not found until installed)"
   fi
   echo "--- model ---"
-  NAME=qwen2.5-0.5b-instruct-q4_k_m.gguf
+  NAME=qwen2.5-1.5b-instruct-q4_k_m.gguf
   FOUND=""
   for p in \
     "$HOME/Library/Application Support/LensTrans/models/$NAME" \

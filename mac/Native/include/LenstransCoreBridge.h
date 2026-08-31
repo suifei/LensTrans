@@ -36,9 +36,11 @@ typedef struct LenstransCoreLayout {
     float text_inset_y;
     float corner_radius;
     float background_alpha;
+    float source_line_height;
     int mode;
     int covers_source;
     int show_source;
+    int center_text_vertically;
     uint8_t text_red;
     uint8_t text_green;
     uint8_t text_blue;
@@ -62,6 +64,7 @@ typedef struct LenstransCoreUiVisual {
 } LenstransCoreUiVisual;
 
 typedef struct LenstransCoreBatch LenstransCoreBatch;
+typedef struct LenstransCorePresentBatch LenstransCorePresentBatch;
 
 enum {
     LT_BOX_HIDDEN = 0,
@@ -148,17 +151,49 @@ int lenstrans_core_batch_chat_prompt(const char *source, const char *source_lang
                                      char *out, size_t out_capacity);
 int lenstrans_core_batch_parse_item(const char *output, size_t count, size_t index,
                                     char *out, size_t out_capacity);
-int lenstrans_core_batch_output_usable(const LenstransCoreBatch *batch, const char *output);
+int lenstrans_core_batch_output_usable(const LenstransCoreBatch *batch, const char *output,
+                                       const char *target_language);
+int lenstrans_core_translation_usable(const char *source, const char *translation,
+                                      const char *target_language);
+int lenstrans_core_source_needs_translation(const char *source, const char *target_language);
 size_t lenstrans_core_batch_fallback_group_size(void);
 int lenstrans_core_batch_fallback_usable(size_t total_groups, size_t usable_groups);
 
 int lenstrans_core_layout_block(const LenstransCoreBlock *block, const char *translation,
                                 int frame_width, int frame_height, int target_width,
                                 int target_height, int contrast, int render_lock,
-                                int sticker_alpha, int font_scale, LenstransCoreLayout *out);
+                                int sticker_alpha, int font_scale, float target_pixels_per_unit,
+                                LenstransCoreLayout *out, char *wrapped_text,
+                                size_t wrapped_text_capacity);
+LenstransCorePresentBatch *lenstrans_core_present_batch_create(
+    int frame_width, int frame_height, int target_width, int target_height,
+    int contrast, int render_lock, int sticker_alpha, int font_scale,
+    float target_pixels_per_unit);
+void lenstrans_core_present_batch_destroy(LenstransCorePresentBatch *batch);
+int lenstrans_core_present_batch_add(LenstransCorePresentBatch *batch,
+                                     const LenstransCoreBlock *block,
+                                     const char *translation);
+int lenstrans_core_present_batch_add_mask(LenstransCorePresentBatch *batch,
+                                          float x, float y, float width, float height);
+size_t lenstrans_core_present_batch_build(LenstransCorePresentBatch *batch);
+int lenstrans_core_present_batch_get(const LenstransCorePresentBatch *batch, size_t index,
+                                     LenstransCoreLayout *out, char *wrapped_text,
+                                     size_t wrapped_text_capacity, char *source_text,
+                                     size_t source_text_capacity);
+size_t lenstrans_core_present_batch_cover_count(const LenstransCorePresentBatch *batch,
+                                                size_t index);
+int lenstrans_core_present_batch_cover_get(const LenstransCorePresentBatch *batch,
+                                           size_t index, size_t cover_index,
+                                           float *x, float *y, float *width, float *height);
 
 int lenstrans_core_build_prompt(const char *text, const char *source_language,
                                 const char *target_language, char *out, size_t out_capacity);
+int lenstrans_core_build_local_engine_prompt(const char *text, const char *source_language,
+                                             const char *target_language, int batch_protocol,
+                                             const char *model_path, char *out,
+                                             size_t out_capacity);
+int lenstrans_core_output_token_budget(const char *text, int batch_protocol, int quality);
+int lenstrans_core_is_hunyuan_model_path(const char *model_path);
 
 #ifdef __cplusplus
 }

@@ -169,18 +169,18 @@ if ((Test-Path $pack) -and (Test-Path (Join-Path $rel "lenstrans_overlay.exe")))
   Add-Result "base_pack" "base pack <=30MB" $false $pack "overlay or pack script missing"
 }
 
-$gguf = Join-Path $Root "models\qwen2.5-0.5b-instruct-q4_k_m.gguf"
+$gguf = Join-Path $Root "models\qwen2.5-1.5b-instruct-q4_k_m.gguf"
 if ($WithGguf) {
   if (-not (Test-Path $gguf)) {
     New-Item -ItemType Directory -Force -Path (Join-Path $Root "models") | Out-Null
     $urls = @(
-      "https://www.modelscope.cn/models/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/master/qwen2.5-0.5b-instruct-q4_k_m.gguf",
-      "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf"
+      "https://www.modelscope.cn/models/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/master/qwen2.5-1.5b-instruct-q4_k_m.gguf",
+      "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf"
     )
     foreach ($u in $urls) {
       try {
         curl.exe -L -C - --retry 8 --retry-all-errors -o $gguf $u
-        if ((Get-Item $gguf).Length -eq 491400032) { break }
+        if ((Get-Item $gguf).Length -eq 1117320736) { break }
       } catch { }
     }
   }

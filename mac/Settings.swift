@@ -117,8 +117,15 @@ enum SettingsWindow {
         save.frame = NSRect(x: 400, y: 12, width: 80, height: 28)
         save.keyEquivalent = "\r"
         SettingsSaveTarget.shared.onSave = {
+            let previousModel = store.modelPath
             applyFields()
             store.save()
+            if previousModel != store.modelPath {
+                Task { @MainActor in
+                    _ = await MacLocalEnginePool.shared.prewarm(
+                        modelPath: MacPaths.resolveModelPath(), cliPath: MacPaths.findLlamaCli())
+                }
+            }
             TrayController.shared.contrastMode = store.contrast
             OverlayBoxStore.shared.refreshAppearance()
             win.close()
@@ -138,6 +145,9 @@ enum SettingsWindow {
         let f = fields
         if let b = f.autostart { s.autostart = b.state == .on }
         if let b = f.download { s.downloadModel = b.state == .on }
+        if let popup = f.localModelPopup {
+            s.modelPath = popup.selectedItem?.representedObject as? String ?? ""
+        }
         if let b = f.contrast { s.contrast = b.state == .on }
         if let t = f.baseField { s.cloudBaseURL = t.stringValue.trimmingCharacters(in: .whitespaces) }
         if let t = f.modelField { s.cloudModel = t.stringValue.trimmingCharacters(in: .whitespaces) }
@@ -163,6 +173,33 @@ enum SettingsWindow {
         dl.frame = NSRect(x: 16, y: 180, width: 240, height: 24)
         f.download = dl
         v.addSubview(dl)
+        let modelLabel = NSTextField(labelWithString: "本地模型")
+        modelLabel.frame = NSRect(x: 16, y: 145, width: 100, height: 20)
+        v.addSubview(modelLabel)
+        let popup = NSPopUpButton(frame: NSRect(x: 16, y: 112, width: 440, height: 28))
+        popup.addItem(withTitle: "自动选择（active-model.txt / 默认模型）")
+        popup.lastItem?.representedObject = ""
+        let models = MacPaths.discoverModels()
+        for path in models {
+            let bytes = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? NSNumber)?
+                .int64Value ?? 0
+            let size = ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+            popup.addItem(withTitle: "\((path as NSString).lastPathComponent) · \(size)")
+            popup.lastItem?.representedObject = path
+        }
+        if !s.modelPath.isEmpty,
+           let index = popup.itemArray.firstIndex(where: {
+               ($0.representedObject as? String) == s.modelPath
+           }) {
+            popup.selectItem(at: index)
+        }
+        f.localModelPopup = popup
+        v.addSubview(popup)
+        let location = NSTextField(labelWithString: "插件目录：~/Library/Application Support/LensTrans/models")
+        location.frame = NSRect(x: 16, y: 82, width: 440, height: 20)
+        location.font = .systemFont(ofSize: 11)
+        location.textColor = .secondaryLabelColor
+        v.addSubview(location)
         return v
     }
 
@@ -200,7 +237,7 @@ enum SettingsWindow {
     private static func buildAbout() -> NSView {
         let v = NSView(frame: NSRect(x: 0, y: 0, width: 480, height: 280))
         let l = NSTextField(wrappingLabelWithString:
-            "LensTrans 0.2\n默认模型 Qwen2.5-0.5B Instruct Q4_K_M\nApache-2.0 可覆盖 EU/UK/KR\n无 Electron / Tauri / Hunyuan")
+            "LensTrans 0.3.0\n全球回退 Qwen2.5-1.5B Instruct Q4_K_M\n支持本地 GGUF 模型插件\n无 Electron / Tauri / WebView")
         l.frame = NSRect(x: 16, y: 120, width: 440, height: 120)
         v.addSubview(l)
         return v
@@ -220,6 +257,7 @@ enum SettingsWindow {
 private struct SettingsFields {
     var autostart: NSButton?
     var download: NSButton?
+    var localModelPopup: NSPopUpButton?
     var contrast: NSButton?
     var baseField: NSTextField?
     var modelField: NSTextField?

@@ -49,7 +49,7 @@ final class LogicTests: XCTestCase {
     }
 
     func testModelMeta() {
-        XCTAssertEqual(ModelMetaLogic.ggufBytes, 491400032)
+        XCTAssertEqual(ModelMetaLogic.ggufBytes, 1117320736)
         XCTAssertTrue(ModelMetaLogic.sha256Matches(ModelMetaLogic.ggufSha256))
         XCTAssertTrue(ModelMetaLogic.sha256Matches(ModelMetaLogic.ggufSha256.uppercased()))
         XCTAssertFalse(ModelMetaLogic.sha256Matches("deadbeef"))

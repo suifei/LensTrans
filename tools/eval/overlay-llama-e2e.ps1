@@ -1,4 +1,4 @@
-# Overlay e2e with real LocalEngine (Qwen2.5-0.5B). Watchdog 45s incl. model load.
+# Overlay e2e with real LocalEngine (Qwen2.5-1.5B). Watchdog 45s incl. model load.
 param(
   [int]$TimeoutSec = 45,
   [int]$E2eSec = 35
@@ -15,7 +15,7 @@ if (-not $ok) {
   Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
   $utf8 = New-Object System.Text.UTF8Encoding $false
   $lines = @(
-    "# Overlay e2e llama (LocalEngine Qwen2.5-0.5B)",
+    "# Overlay e2e llama (LocalEngine Qwen2.5-1.5B)",
     "",
     "- date: $(Get-Date -Format yyyy-MM-dd)",
     "- status: **timeout**",

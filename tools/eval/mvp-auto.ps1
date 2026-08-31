@@ -143,7 +143,7 @@ try {
   }
   Add-Result "base_pack" "base pack 30MB" $basePass $sizeMd $(if ($basePass) { "PASS" } else { "FAIL" })
   if (-not $basePass) { $fail += 1 }
-  $gguf = Join-Path $Root "models\qwen2.5-0.5b-instruct-q4_k_m.gguf"
+  $gguf = Join-Path $Root "models\qwen2.5-1.5b-instruct-q4_k_m.gguf"
   if (Test-Path $gguf) {
     & $packScript -Offline | Out-Null
     if (Test-Path $sizeMd) {
@@ -160,7 +160,7 @@ try {
   $fail += 1
 }
 
-$modelPath = Join-Path $Root "models\qwen2.5-0.5b-instruct-q4_k_m.gguf"
+$modelPath = Join-Path $Root "models\qwen2.5-1.5b-instruct-q4_k_m.gguf"
 $llamaScript = Join-Path $Root "tools\eval\overlay-llama-e2e.ps1"
 if (-not $SkipLlama -and (Test-Path $modelPath) -and (Test-Path $llamaScript)) {
   $fail += Invoke-EvalScript "overlay_llama" "overlay-llama optional" $llamaScript @{ E2eSec=35; TimeoutSec=45 }

@@ -70,6 +70,11 @@ final class MacLocalEngine: MacEngine {
 
     func noteActivity() { lastActivity = Date() }
 
+    func preload() -> Bool {
+        guard metalReady, let engine = ensureNative() else { return false }
+        return lenstrans_llama_load(engine) != 0
+    }
+
     func unload() {
         nativeLock.lock()
         defer { nativeLock.unlock() }
@@ -93,17 +98,15 @@ final class MacLocalEngine: MacEngine {
             r.error = "local model missing"
             return r
         }
-        let prompt = req.batchProtocol
-            ? MacCoreBridge.batchPrompt(source: req.text, sourceLanguage: req.srcLang,
-                                        targetLanguage: req.tgtLang,
-                                        chatWrapped: true)
-            : MacCoreBridge.prompt(text: req.text, sourceLanguage: req.srcLang,
-                                   targetLanguage: req.tgtLang)
+        let prompt = MacCoreBridge.localEnginePrompt(
+            text: req.text, sourceLanguage: req.srcLang, targetLanguage: req.tgtLang,
+            batchProtocol: req.batchProtocol, modelPath: modelPath)
         guard let prompt else {
             r.error = "core prompt build failed"
             return r
         }
-        let maxNew = req.batchProtocol ? (req.quality ? 512 : 384) : (req.quality ? 96 : 48)
+        let maxNew = MacCoreBridge.outputTokenBudget(
+            text: req.text, batchProtocol: req.batchProtocol, quality: req.quality)
 
         // 1) Prefer in-process Metal.
         if LlamaInProcess.available {
@@ -222,6 +225,36 @@ final class MacLocalEngine: MacEngine {
         }
         proc.waitUntilExit()
         return String(data: stdout, encoding: .utf8) ?? ""
+    }
+}
+
+actor MacLocalEnginePool {
+    static let shared = MacLocalEnginePool()
+
+    private var engines: [String: MacLocalEngine] = [:]
+    private var order: [String] = []
+
+    private func resolve(modelPath: String, cliPath: String?) -> MacLocalEngine {
+        let key = modelPath + "\u{0}" + (cliPath ?? "")
+        if let engine = engines[key] { return engine }
+        if engines.count >= 2, let evicted = order.first {
+            engines.removeValue(forKey: evicted)?.unload()
+            order.removeFirst()
+        }
+        let replacement = MacLocalEngine(modelPath: modelPath, cliPath: cliPath)
+        engines[key] = replacement
+        order.append(key)
+        return replacement
+    }
+
+    func prewarm(modelPath: String, cliPath: String?) -> Bool {
+        resolve(modelPath: modelPath, cliPath: cliPath).preload()
+    }
+
+    func translate(_ requests: [MacTranslateRequest], modelPath: String,
+                   cliPath: String?) -> [MacTranslateResult] {
+        let engine = resolve(modelPath: modelPath, cliPath: cliPath)
+        return requests.map { engine.translate($0) }
     }
 }
 

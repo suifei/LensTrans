@@ -3,6 +3,7 @@
 #include "lenstrans/model_meta.hpp"
 
 #include <cstdlib>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -71,22 +72,75 @@ inline bool EnsureDir(const std::string& dir) {
   return !ec;
 }
 
-inline std::string FindDefaultModelPath(const std::string& override_path = {}) {
-  if (!override_path.empty() && FileExists(override_path)) return override_path;
-  const std::string name = kDefaultGgufFileName;
+inline std::vector<std::string> GgufFilesIn(const std::string& dir) {
+  std::vector<std::string> files;
+  std::error_code ec;
+  for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+    if (ec) break;
+    if (!entry.is_regular_file(ec)) continue;
+    auto extension = entry.path().extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (extension == ".gguf") files.push_back(entry.path().string());
+  }
+  std::sort(files.begin(), files.end());
+  return files;
+}
+
+inline std::string ActiveModelIn(const std::string& dir) {
+  std::ifstream input(JoinPath(dir, "active-model.txt"), std::ios::binary);
+  std::string name;
+  if (!input || !std::getline(input, name)) return {};
+  while (!name.empty() && std::isspace(static_cast<unsigned char>(name.back()))) name.pop_back();
+  while (!name.empty() && std::isspace(static_cast<unsigned char>(name.front()))) name.erase(name.begin());
+  if (name.empty()) return {};
+  const auto path = std::filesystem::path(name).is_absolute() ? name : JoinPath(dir, name);
+  return FileExists(path) ? path : std::string();
+}
+
+inline std::vector<std::string> DefaultModelDirectories() {
   const std::string root = DetectRepoRoot();
   const std::string exe = ExeDir();
-  const std::vector<std::string> cands = {
-      JoinPath(root, JoinPath("models", name)),
-      JoinPath(exe, name),
-      JoinPath(exe, JoinPath("models", name)),
-      JoinPath(JoinPath(exe, ".."), JoinPath("models", name)),
-      JoinPath(JoinPath(exe, "../.."), JoinPath("models", name)),
+  std::vector<std::string> dirs = {
+      JoinPath(root, "models"), exe, JoinPath(exe, "models"),
+      JoinPath(JoinPath(exe, ".."), "models"),
+      JoinPath(JoinPath(exe, "../.."), "models"),
   };
-  for (const auto& p : cands) {
+#ifdef _WIN32
+  if (const char* local = std::getenv("LOCALAPPDATA"); local && *local)
+    dirs.insert(dirs.begin(), JoinPath(JoinPath(local, "LensTrans"), "models"));
+#endif
+  return dirs;
+}
+
+inline std::string FindDefaultModelPath(const std::string& override_path = {}) {
+  if (!override_path.empty() && FileExists(override_path)) return override_path;
+  if (const char* env = std::getenv("LENSTRANS_MODEL_PATH"); env && *env && FileExists(env))
+    return env;
+  const std::string name = kDefaultGgufFileName;
+  const std::string root = DetectRepoRoot();
+  const auto dirs = DefaultModelDirectories();
+  for (const auto& dir : dirs) {
+    const auto active = ActiveModelIn(dir);
+    if (!active.empty()) return active;
+  }
+  for (const auto& dir : dirs) {
+    const auto p = JoinPath(dir, name);
     if (FileExists(p)) return p;
   }
+  for (const auto& dir : dirs) {
+    const auto files = GgufFilesIn(dir);
+    if (!files.empty()) return files.front();
+  }
   return JoinPath(root, JoinPath("models", name));
+}
+
+inline std::string FindFallbackModelPath(const std::string& primary_path) {
+  for (const auto& dir : DefaultModelDirectories()) {
+    const auto candidate = JoinPath(dir, kDefaultGgufFileName);
+    if (candidate != primary_path && FileExists(candidate)) return candidate;
+  }
+  return {};
 }
 
 inline std::string FindLlamaCliPath() {

@@ -9,7 +9,7 @@
 [![UI](https://img.shields.io/badge/shell-Win32%20native-informational)](#它是什么)
 [![Engine](https://img.shields.io/badge/local-Qwen2.5--0.5B%20GGUF-orange)](#功能)
 
-**Windows 原生实时屏幕翻译器。** 在任意窗口上拉一个分层、可点击穿透的框：用 Windows Graphics Capture（WGC）抓像素，系统 OCR 读字，本地 Qwen2.5-0.5B 或你自己填的 OpenAI 兼容端点翻译，再用沉浸填色或贴条把原文盖住。不用 Electron，不用 Tauri，不用 WebView 壳。
+**Windows 原生实时屏幕翻译器。** 在任意窗口上拉一个分层、可点击穿透的框：用 Windows Graphics Capture（WGC）抓像素，系统 OCR 读字，本地 Qwen2.5-1.5B 或你自己填的 OpenAI 兼容端点翻译，再用沉浸填色或贴条把原文盖住。不用 Electron，不用 Tauri，不用 WebView 壳。
 
 ## 它是什么
 
@@ -47,7 +47,7 @@ Hidden → Editing → Watching ⇄ Translating
 | --- | --- | --- |
 | 位置 | 另开一窗，离开原文 | 框钉在你画出的像素上 |
 | 时机 | 单次截取 | 框内画面变化就更新 |
-| 离线 | 往往要联网 | 默认本地 Qwen2.5-0.5B |
+| 离线 | 往往要联网 | 默认本地 Qwen2.5-1.5B |
 | 观感 | 原文和译文同时看见 | 沉浸填色或贴条 **盖住** 原文 |
 
 ## 功能
@@ -60,7 +60,7 @@ Hidden → Editing → Watching ⇄ Translating
 | OCR | `Windows.Media.OCR` 在 STA 线程 → 统一 `OcrBlock`（文本、框、采样色） |
 | 稳定 | 连续 2 帧 bbox+text 一致，再加 300ms 去抖才提交翻译 |
 | 呈现 | 沉浸替换 / 贴条（默认约 92% 不透明）/ 贴条+对照。禁止纯透明叠字 |
-| 本地翻译 | Qwen2.5-0.5B Instruct Q4_K_M，经 [llama.cpp](https://github.com/ggml-org/llama.cpp) **b10688**（进程内链接或 `llama-cli`） |
+| 本地翻译 | Qwen2.5-1.5B Instruct Q4_K_M，经 [llama.cpp](https://github.com/ggml-org/llama.cpp) **b10688**（进程内链接或 `llama-cli`） |
 | 云端翻译 | WinHTTP `POST {base}/chat/completions`。Base URL / Model / API Key **全部留空**，空则禁用 |
 | 密钥 | DPAPI 落盘；设置序列化里不得出现 `api_key`（有单测） |
 | 界面 | 设置 5 个 Tab、首次 3 步引导（引导阶段不拉起 WGC） |
@@ -140,7 +140,7 @@ powershell -File tools\pack\install-windows.ps1
 
 本机曾测过脚本基础树约 **4.5 MB**（zip 约 1.8 MB），离线合计约 **496 MB**，都在上限内。那是单机产物，换工具链数字会变，但预算不变。
 
-默认权重：`qwen2.5-0.5b-instruct-q4_k_m.gguf`，491400032 字节，SHA256 `74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db`。下载步骤见 [models/README.md](models/README.md)。选它是因为 **Apache-2.0 允许含 EU/UK/KR 的再分发**，不是因为 0.5B 已经达到专职翻译模型的质量。
+默认权重：`qwen2.5-1.5b-instruct-q4_k_m.gguf`，1117320736 字节，SHA256 `6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e`。下载步骤见 [models/README.md](models/README.md)。选它是因为 **Apache-2.0 允许含 EU/UK/KR 的再分发**，不是因为 0.5B 已经达到专职翻译模型的质量。
 
 ## 隐私
 
@@ -184,7 +184,7 @@ third_party/    自行克隆 llama.cpp b10688（整树不入库）
 
 [MIT](LICENSE) © 2026 flynn (suifei)。
 
-可选的 Qwen2.5-0.5B GGUF 是 **Apache-2.0**（Alibaba Cloud）。再分发权重须附带该协议。核对副本：`tools/eval/licenses/`。llama.cpp 走上游许可证，请从官方仓库克隆。
+可选的 Qwen2.5-1.5B GGUF 是 **Apache-2.0**（Alibaba Cloud）。再分发权重须附带该协议。核对副本：`tools/eval/licenses/`。llama.cpp 走上游许可证，请从官方仓库克隆。
 
 ## 贡献
 

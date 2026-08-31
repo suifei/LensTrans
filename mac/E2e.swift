@@ -129,14 +129,12 @@ enum MacE2e {
             lines.append("- drag_ok: \(dragOk)")
 
             // --- Overlay present visualization (problem 3) ---
-            box.applyPresent(
-                mode: .sticker,
-                text: "你好世界",
-                source: "HELLO",
+            box.applyPresent(blocks: [MacPresentBlock(
+                rect: CGRect(x: 24, y: 16, width: 180, height: 48), mode: .sticker,
+                text: "你好世界", source: "HELLO",
                 fill: NSColor(calibratedRed: 0.05, green: 0.05, blue: 0.08, alpha: 1),
-                textColor: .white,
-                stickerAlpha: 0.92
-            )
+                textColor: .white, stickerAlpha: 0.92
+            )])
             let upright = box.e2ePresentTextNearTop()
             box.applyPresent(blocks: [
                 MacPresentBlock(
@@ -194,14 +192,20 @@ enum MacE2e {
             let wantLlama = args.llama || local.ready
             if wantLlama {
                 if local.ready {
+                    let preloadStarted = Date()
+                    let preloaded = local.preload()
+                    let preloadMs = Int(Date().timeIntervalSince(preloadStarted) * 1000)
                     let r = local.translate(MacTranslateRequest(text: block.text, tgtLang: "zh"))
                     sampleHyp = r.text
-                    translateOk = r.error.isEmpty && !r.text.isEmpty
+                    translateOk = r.error.isEmpty && MacCoreBridge.translationUsable(
+                        source: block.text, translation: r.text, targetLanguage: "zh")
                     lines.append("- translate_text: \(r.text)")
                     lines.append("- translate_error: \(r.error)")
                     lines.append("- translate_ms: \(r.latencyMs)")
                     lines.append("- translate_backend: \(r.backend.isEmpty ? "?" : r.backend)")
                     lines.append("- metal_linked: \(LlamaInProcess.available)")
+                    lines.append("- preload_ready: \(preloaded)")
+                    lines.append("- preload_ms: \(preloadMs)")
                 } else {
                     detail = "llama requested but model/cli missing"
                     lines.append("- translate_skip: \(detail)")
@@ -290,7 +294,8 @@ enum MacE2e {
                             block: block, translation: result.text,
                             frameSize: CGSize(width: frame.width, height: frame.height),
                             targetSize: fixture.frame.size, contrast: false,
-                            render: "auto", stickerAlpha: 92, fontScale: 100) else { continue }
+                            render: "auto", stickerAlpha: 92, fontScale: 100,
+                            targetPixelsPerUnit: runtimePanel.backingScaleFactor) else { continue }
                     runtimePlans.append(MacPresentBlock(
                         rect: layout.rect, mode: layout.mode, text: result.text,
                         source: nil,

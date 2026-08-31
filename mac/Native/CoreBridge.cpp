@@ -86,10 +86,52 @@ void copy_string(const std::string &value, char *out, size_t capacity) {
   out[count] = '\0';
 }
 
+void copy_layout(const lenstrans::PresentBlockLayout &layout, LenstransCoreLayout &out,
+                 char *wrapped_text, size_t wrapped_text_capacity) {
+  out.x = layout.rect.x;
+  out.y = layout.rect.y;
+  out.width = layout.rect.w;
+  out.height = layout.rect.h;
+  out.font_px = layout.font_px;
+  out.font_weight = layout.font_weight;
+  out.line_height_px = layout.line_height_px;
+  out.margin_px = layout.margin_px;
+  out.text_inset_x = layout.text_inset_x;
+  out.text_inset_y = layout.text_inset_y;
+  out.corner_radius = layout.corner_radius;
+  out.background_alpha = layout.background_alpha;
+  out.source_line_height = layout.source.line_height;
+  out.mode = layout.mode == lenstrans::PresentMode::StickerContrast
+                 ? LT_PRESENT_STICKER_CONTRAST
+                 : layout.mode == lenstrans::PresentMode::Sticker ? LT_PRESENT_STICKER
+                                                                   : LT_PRESENT_IMMERSIVE;
+  out.covers_source = layout.covers_source ? 1 : 0;
+  out.show_source = layout.show_source ? 1 : 0;
+  out.center_text_vertically = layout.center_text_vertically ? 1 : 0;
+  out.text_red = layout.text_color.r;
+  out.text_green = layout.text_color.g;
+  out.text_blue = layout.text_color.b;
+  out.fill_red = layout.fill_color.r;
+  out.fill_green = layout.fill_color.g;
+  out.fill_blue = layout.fill_color.b;
+  std::string joined;
+  for (std::size_t i = 0; i < layout.lines.size(); ++i) {
+    if (i) joined.push_back('\n');
+    joined += layout.lines[i];
+  }
+  copy_string(joined, wrapped_text, wrapped_text_capacity);
+}
+
 }  // namespace
 
 struct LenstransCoreBatch {
   std::vector<lenstrans::OcrBlock> blocks;
+};
+
+struct LenstransCorePresentBatch {
+  lenstrans::LayoutOptions options;
+  std::vector<lenstrans::TranslatedBlock> blocks;
+  std::vector<lenstrans::PresentBlockLayout> layouts;
 };
 
 extern "C" int lenstrans_core_transition(int state, int event) {
@@ -257,9 +299,23 @@ extern "C" int lenstrans_core_batch_parse_item(const char *output, size_t count,
 }
 
 extern "C" int lenstrans_core_batch_output_usable(const LenstransCoreBatch *batch,
-                                                      const char *output) {
-  if (!batch || !output) return 0;
-  return lenstrans::BatchTranslationUsable(batch->blocks, output) ? 1 : 0;
+                                                      const char *output,
+                                                      const char *target_language) {
+  if (!batch || !output || !target_language) return 0;
+  return lenstrans::BatchTranslationUsable(batch->blocks, output, target_language) ? 1 : 0;
+}
+
+extern "C" int lenstrans_core_translation_usable(const char *source,
+                                                     const char *translation,
+                                                     const char *target_language) {
+  if (!source || !translation || !target_language) return 0;
+  return lenstrans::TranslationUsableForTarget(source, translation, target_language) ? 1 : 0;
+}
+
+extern "C" int lenstrans_core_source_needs_translation(const char *source,
+                                                         const char *target_language) {
+  if (!source || !target_language) return 0;
+  return lenstrans::SourceNeedsTranslationForTarget(source, target_language) ? 1 : 0;
 }
 
 extern "C" size_t lenstrans_core_batch_fallback_group_size(void) { return 3; }
@@ -273,10 +329,14 @@ extern "C" int lenstrans_core_layout_block(const LenstransCoreBlock *input, cons
                                              int frame_width, int frame_height, int target_width,
                                              int target_height, int contrast, int render_lock,
                                              int sticker_alpha, int font_scale,
-                                             LenstransCoreLayout *out) {
+                                             float target_pixels_per_unit,
+                                             LenstransCoreLayout *out, char *wrapped_text,
+                                             size_t wrapped_text_capacity) {
   if (!input || !translation || !out || !valid_block(*input) || !translation[0] ||
-      frame_width <= 0 || frame_height <= 0 || target_width <= 0 || target_height <= 0)
+      !wrapped_text || wrapped_text_capacity == 0 || frame_width <= 0 || frame_height <= 0 ||
+      target_width <= 0 || target_height <= 0)
     return 0;
+  wrapped_text[0] = '\0';
   try {
     std::vector<lenstrans::TranslatedBlock> blocks;
     blocks.push_back({to_block(*input), translation, {}, false});
@@ -285,42 +345,117 @@ extern "C" int lenstrans_core_layout_block(const LenstransCoreBlock *input, cons
     options.frame_height = frame_height;
     options.target_width = target_width;
     options.target_height = target_height;
+    options.target_pixels_per_unit = std::max(0.5f, std::min(8.0f, target_pixels_per_unit));
     options.presentation.lock = to_lock(render_lock);
     options.presentation.contrast = contrast != 0;
     options.presentation.sticker_alpha = std::max(0, std::min(100, sticker_alpha));
     options.presentation.font_scale = std::max(1, std::min(400, font_scale));
     const auto layouts = lenstrans::BuildPresentLayout(blocks, options);
     if (layouts.empty()) return 0;
-    const auto &layout = layouts.front();
-    out->x = layout.rect.x;
-    out->y = layout.rect.y;
-    out->width = layout.rect.w;
-    out->height = layout.rect.h;
-    out->font_px = layout.font_px;
-    out->font_weight = layout.font_weight;
-    out->line_height_px = layout.line_height_px;
-    out->margin_px = layout.margin_px;
-    out->text_inset_x = layout.text_inset_x;
-    out->text_inset_y = layout.text_inset_y;
-    out->corner_radius = layout.corner_radius;
-    out->background_alpha = layout.background_alpha;
-    out->mode = layout.mode == lenstrans::PresentMode::StickerContrast
-                    ? LT_PRESENT_STICKER_CONTRAST
-                    : layout.mode == lenstrans::PresentMode::Sticker ? LT_PRESENT_STICKER
-                                                                      : LT_PRESENT_IMMERSIVE;
-    out->covers_source = layout.covers_source ? 1 : 0;
-    out->show_source = layout.show_source ? 1 : 0;
-    out->text_red = layout.text_color.r;
-    out->text_green = layout.text_color.g;
-    out->text_blue = layout.text_color.b;
-    out->fill_red = layout.fill_color.r;
-    out->fill_green = layout.fill_color.g;
-    out->fill_blue = layout.fill_color.b;
+    copy_layout(layouts.front(), *out, wrapped_text, wrapped_text_capacity);
     return 1;
   } catch (...) {
     std::memset(out, 0, sizeof(*out));
     return 0;
   }
+}
+
+extern "C" LenstransCorePresentBatch *lenstrans_core_present_batch_create(
+    int frame_width, int frame_height, int target_width, int target_height,
+    int contrast, int render_lock, int sticker_alpha, int font_scale,
+    float target_pixels_per_unit) {
+  if (frame_width <= 0 || frame_height <= 0 || target_width <= 0 || target_height <= 0)
+    return nullptr;
+  try {
+    auto *batch = new LenstransCorePresentBatch();
+    batch->options.frame_width = frame_width;
+    batch->options.frame_height = frame_height;
+    batch->options.target_width = target_width;
+    batch->options.target_height = target_height;
+    batch->options.target_pixels_per_unit =
+        std::max(0.5f, std::min(8.0f, target_pixels_per_unit));
+    batch->options.presentation.lock = to_lock(render_lock);
+    batch->options.presentation.contrast = contrast != 0;
+    batch->options.presentation.sticker_alpha = std::max(0, std::min(100, sticker_alpha));
+    batch->options.presentation.font_scale = std::max(1, std::min(400, font_scale));
+    return batch;
+  } catch (...) {
+    return nullptr;
+  }
+}
+
+extern "C" void lenstrans_core_present_batch_destroy(LenstransCorePresentBatch *batch) {
+  delete batch;
+}
+
+extern "C" int lenstrans_core_present_batch_add(LenstransCorePresentBatch *batch,
+                                                  const LenstransCoreBlock *block,
+                                                  const char *translation) {
+  if (!batch || !block || !translation || !translation[0] || !valid_block(*block)) return 0;
+  try {
+    batch->blocks.push_back({to_block(*block), translation, {}, false});
+    return 1;
+  } catch (...) {
+    return 0;
+  }
+}
+
+extern "C" int lenstrans_core_present_batch_add_mask(LenstransCorePresentBatch *batch,
+                                                       float x, float y, float width,
+                                                       float height) {
+  if (!batch || batch->blocks.empty() || !finite(x) || !finite(y) || !finite(width) ||
+      !finite(height) || width <= 0 || height <= 0)
+    return 0;
+  batch->blocks.back().source.mask_boxes.push_back({x, y, width, height});
+  return 1;
+}
+
+extern "C" size_t lenstrans_core_present_batch_build(LenstransCorePresentBatch *batch) {
+  if (!batch) return 0;
+  try {
+    batch->layouts = lenstrans::BuildPresentLayout(batch->blocks, batch->options);
+    return batch->layouts.size();
+  } catch (...) {
+    batch->layouts.clear();
+    return 0;
+  }
+}
+
+extern "C" int lenstrans_core_present_batch_get(
+    const LenstransCorePresentBatch *batch, size_t index, LenstransCoreLayout *out,
+    char *wrapped_text, size_t wrapped_text_capacity, char *source_text,
+    size_t source_text_capacity) {
+  if (!batch || !out || !wrapped_text || wrapped_text_capacity == 0 || !source_text ||
+      source_text_capacity == 0 || index >= batch->layouts.size())
+    return 0;
+  std::memset(out, 0, sizeof(*out));
+  wrapped_text[0] = '\0';
+  source_text[0] = '\0';
+  try {
+    const auto &layout = batch->layouts[index];
+    copy_layout(layout, *out, wrapped_text, wrapped_text_capacity);
+    copy_string(layout.source.text, source_text, source_text_capacity);
+    return 1;
+  } catch (...) {
+    return 0;
+  }
+}
+
+extern "C" size_t lenstrans_core_present_batch_cover_count(
+    const LenstransCorePresentBatch *batch, size_t index) {
+  if (!batch || index >= batch->layouts.size()) return 0;
+  return batch->layouts[index].cover_rects.size();
+}
+
+extern "C" int lenstrans_core_present_batch_cover_get(
+    const LenstransCorePresentBatch *batch, size_t index, size_t cover_index,
+    float *x, float *y, float *width, float *height) {
+  if (!batch || !x || !y || !width || !height || index >= batch->layouts.size() ||
+      cover_index >= batch->layouts[index].cover_rects.size())
+    return 0;
+  const auto& rect = batch->layouts[index].cover_rects[cover_index];
+  *x = rect.x; *y = rect.y; *width = rect.w; *height = rect.h;
+  return 1;
 }
 
 extern "C" int lenstrans_core_build_prompt(const char *text, const char *source_language,
@@ -338,4 +473,35 @@ extern "C" int lenstrans_core_build_prompt(const char *text, const char *source_
   } catch (...) {
     return 0;
   }
+}
+
+extern "C" int lenstrans_core_output_token_budget(const char *text, int batch_protocol,
+                                                    int quality) {
+  lenstrans::TranslateRequest request;
+  request.text = text ? text : "";
+  request.batch_protocol = batch_protocol != 0;
+  request.quality = quality != 0;
+  return lenstrans::TranslationOutputTokenBudget(request);
+}
+
+extern "C" int lenstrans_core_build_local_engine_prompt(
+    const char *text, const char *source_language, const char *target_language,
+    int batch_protocol, const char *model_path, char *out, size_t out_capacity) {
+  if (!text || !target_language || !model_path || !out || out_capacity == 0) return 0;
+  out[0] = '\0';
+  try {
+    lenstrans::TranslateRequest request;
+    request.text = text;
+    request.src_lang = source_language && source_language[0] ? source_language : "auto";
+    request.tgt_lang = target_language;
+    request.batch_protocol = batch_protocol != 0;
+    copy_string(lenstrans::BuildLocalEnginePrompt(request, model_path), out, out_capacity);
+    return out[0] != '\0' ? 1 : 0;
+  } catch (...) {
+    return 0;
+  }
+}
+
+extern "C" int lenstrans_core_is_hunyuan_model_path(const char *model_path) {
+  return model_path && lenstrans::IsHunyuanMtModelPath(model_path) ? 1 : 0;
 }

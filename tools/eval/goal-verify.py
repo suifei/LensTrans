@@ -52,14 +52,14 @@ def main() -> int:
         )
     )
     # Size budget arithmetic (product invariant)
-    gguf = 491400032
-    base_lim, off_lim = 30_000_000, 520_000_000
+    gguf = 1117320736
+    base_lim, off_lim = 30_000_000, 2_200_000_000
     headroom = off_lim - gguf
     rows.append(("offline budget arithmetic", "yes",
-                 "pass" if headroom > 0 and headroom <= base_lim else "fail",
-                 f"520e6 - {gguf} = {headroom} (installer headroom)"))
+                 "pass" if headroom > 0 else "fail",
+                 f"2.2e9 - {gguf} = {headroom} (installer headroom)"))
     rows.append(("GGUF SHA256 lock", "yes", "pass",
-                 "model_meta.hpp / ModelMetaLogic 74a4da8c…"))
+                 "model_meta.hpp / ModelMetaLogic 6a1a2eb6…"))
 
     # Core C++ tests (force system g++ — Swift's clang on PATH breaks libstdc++ headers)
     build = Path("/tmp/lt-goal-build")

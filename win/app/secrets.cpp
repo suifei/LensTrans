@@ -152,7 +152,7 @@ std::string ProbeCloud(const std::string& base_url, const std::string& model) {
   std::wstring w(static_cast<std::size_t>(n), 0);
   MultiByteToWideChar(CP_UTF8, 0, base_url.c_str(), -1, w.data(), n);
   if (!WinHttpCrackUrl(w.c_str(), 0, 0, &uc)) return "bad url";
-  HINTERNET s = WinHttpOpen(L"LensTrans/0.2", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+  HINTERNET s = WinHttpOpen(L"LensTrans/0.3.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                             WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
   if (!s) return "WinHttpOpen failed";
   WinHttpSetTimeouts(s, 3000, 3000, 3000, 3000);

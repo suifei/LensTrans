@@ -14,7 +14,7 @@
 
 namespace lenstrans::win {
 
-// Hide overlay from WGC/monitor capture (Windows 10 2004+). Returns false on failure.
+// Keep the overlay visible to ordinary screenshots. WGC excludes it per capture session.
 bool ExcludeOverlayFromCapture(HWND overlay);
 
 struct BgraFrame {

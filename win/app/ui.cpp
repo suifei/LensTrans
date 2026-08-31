@@ -127,6 +127,7 @@ constexpr int kKey = 305;
 constexpr int kModel = 306;
 constexpr int kTest = 307;
 constexpr int kQuality = 308;
+constexpr int kLocalModel = 309;
 constexpr int kRendAuto = 401;
 constexpr int kRendSticker = 402;
 constexpr int kRendImm = 403;
@@ -221,6 +222,7 @@ void Collect(HWND dlg, SettingsUi* ui) {
     s.engine = EnginePref::Auto;
   s.cloud_base_url = Narrow(GetDlgItem(p1, kBase));
   s.cloud_model = Narrow(GetDlgItem(p1, kModel));
+  s.model_path = Narrow(GetDlgItem(p1, kLocalModel));
   if (ui->hooks->api_key) *ui->hooks->api_key = Narrow(GetDlgItem(p1, kKey));
   s.quality = SendDlgItemMessageW(p1, kQuality, BM_GETCHECK, 0, 0) == BST_CHECKED;
   if (SendDlgItemMessageW(p2, kRendSticker, BM_GETCHECK, 0, 0) == BST_CHECKED)
@@ -428,7 +430,10 @@ void ShowSettingsWindow(HWND owner, AppHooks& hooks) {
   MakeEdit(p1, 90, 136, 320, 22, kKey, Utf8(hooks.api_key ? *hooks.api_key : ""), true);
   MakeLbl(p1, 8, 166, 80, 18, L"Model");
   MakeEdit(p1, 90, 164, 320, 22, kModel, Utf8(s.cloud_model), false);
-  MakeBtn(p1, 90, 196, 100, 26, kTest, L"测试连接");
+  MakeLbl(p1, 8, 196, 80, 18, L"本地 GGUF");
+  MakeEdit(p1, 90, 194, 320, 22, kLocalModel, Utf8(s.model_path), false);
+  MakeLbl(p1, 90, 218, 320, 18, L"留空自动扫描 %LOCALAPPDATA%\\LensTrans\\models；重启生效");
+  MakeBtn(p1, 90, 244, 100, 26, kTest, L"测试连接");
   HWND p2 = ui->pages[2];
   MakeRadio(p2, 8, 8, 200, 22, kRendAuto, L"自动呈现", s.render == RenderLock::Auto, true);
   MakeRadio(p2, 8, 32, 200, 22, kRendSticker, L"锁定贴条", s.render == RenderLock::Sticker, false);
@@ -440,7 +445,7 @@ void ShowSettingsWindow(HWND owner, AppHooks& hooks) {
   MakeEdit(p2, 180, 138, 60, 22, kScale, std::to_wstring(s.font_scale), false);
   HWND p3 = ui->pages[3];
   wchar_t about[256];
-  swprintf_s(about, L"LensTrans 0.2\n默认模型 Qwen2.5-0.5B Instruct Q4_K_M\n缓存 %zu 条 / %zu 字节\nApache-2.0 可覆盖 EU/UK/KR",
+  swprintf_s(about, L"LensTrans 0.3.0\n全球回退 Qwen2.5-1.5B Instruct Q4_K_M\n缓存 %zu 条 / %zu 字节\n支持本地 GGUF 模型插件",
              hooks.cache_entries, hooks.cache_bytes);
   MakeLbl(p3, 8, 8, 400, 80, about);
   MakeBtn(p3, 8, 100, 120, 26, kClearCache, L"清理缓存");
@@ -510,7 +515,7 @@ void PaintOnbStep(OnbUi* o) {
   } else {
     title = L"LensTrans 引导 3/3 — 本地引擎";
     body =
-        L"默认使用官方 Qwen2.5-0.5B Instruct Q4_K_M（约 491MB）。\n"
+        L"默认使用官方 Qwen2.5-1.5B Instruct Q4_K_M（约 1.12GB）。\n"
         L"勾选后将按需下载（断点续传 + SHA256 校验）；已存在且校验通过则跳过。\n"
         L"云端 Base URL / API Key / Model 全部留空。\n\n"
         L"不勾选仍可创建翻译框（仅云端需自行配置）；下载失败不阻塞完成。";

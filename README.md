@@ -9,7 +9,7 @@
 [![UI](https://img.shields.io/badge/shell-Win32%20native-informational)](#what-it-is)
 [![Engine](https://img.shields.io/badge/local-Qwen2.5--0.5B%20GGUF-orange)](#features)
 
-A **native Windows live screen translator**. Draw a layered, click-through box over any window; LensTrans captures pixels with Windows Graphics Capture (WGC), reads them with system OCR, translates locally (Qwen2.5-0.5B) or through a **user-supplied** OpenAI-compatible endpoint, and covers the source with immersive fill or a sticker. No Electron, no Tauri, no WebView shell.
+A **native Windows live screen translator**. Draw a layered, click-through box over any window; LensTrans captures pixels with Windows Graphics Capture (WGC), reads them with system OCR, translates locally (Qwen2.5-1.5B) or through a **user-supplied** OpenAI-compatible endpoint, and covers the source with immersive fill or a sticker. No Electron, no Tauri, no WebView shell.
 
 ## What it is
 
@@ -47,7 +47,7 @@ Most screen translators grab a bitmap and open a **separate result window**. Len
 | --- | --- | --- |
 | Where | A second window, away from the source | A frame pinned to the pixels you drew |
 | When | One-shot hotkey | Updates as the box contents change |
-| Offline | Often needs the network | Default local Qwen2.5-0.5B |
+| Offline | Often needs the network | Default local Qwen2.5-1.5B |
 | How it looks | Source and translation both visible | Immersive fill or a sticker **covering** the source |
 
 ## Features
@@ -60,7 +60,7 @@ Most screen translators grab a bitmap and open a **separate result window**. Len
 | OCR | `Windows.Media.OCR` on an STA thread → unified `OcrBlock` (text, bbox, sampled color) |
 | Stabilize | Two matching frames (bbox+text) plus 300 ms debounce before commit |
 | Present | Immersive replace / sticker (~92% opaque) / sticker + contrast. Pure transparent overlay text is forbidden |
-| Local engine | Qwen2.5-0.5B Instruct Q4_K_M via [llama.cpp](https://github.com/ggml-org/llama.cpp) **b10688** (in-process link or `llama-cli`) |
+| Local engine | Qwen2.5-1.5B Instruct Q4_K_M via [llama.cpp](https://github.com/ggml-org/llama.cpp) **b10688** (in-process link or `llama-cli`) |
 | Cloud engine | WinHTTP `POST {base}/chat/completions`. Base URL / model / API key all **empty**; empty disables cloud |
 | Secrets | DPAPI on disk; settings serialization must not contain `api_key` (unit-tested) |
 | UI | 5-tab settings, 3-step first-run (does not start WGC during onboarding) |
@@ -140,7 +140,7 @@ These are the numbers the project is held to — not marketing claims. Acceptanc
 
 A local measurement of the scripted base tree was about **4.5 MB** uncompressed / **1.8 MB** zip, offline total about **496 MB** — under the caps. That is one machine’s artifact; toolchains change the number, the budget does not.
 
-Default weights: `qwen2.5-0.5b-instruct-q4_k_m.gguf`, 491400032 bytes, SHA256 `74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db`. Download steps: [models/README.md](models/README.md). It is the default because **Apache-2.0 allows redistribution including EU/UK/KR**, not because 0.5B already matches a dedicated MT model.
+Default weights: `qwen2.5-1.5b-instruct-q4_k_m.gguf`, 1117320736 bytes, SHA256 `6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e`. Download steps: [models/README.md](models/README.md). It is the default because **Apache-2.0 allows redistribution including EU/UK/KR**, not because 0.5B already matches a dedicated MT model.
 
 ## Privacy
 
@@ -184,7 +184,7 @@ Module map and hard constraints: [docs/M0-poc-structure.md](docs/M0-poc-structur
 
 [MIT](LICENSE) © 2026 flynn (suifei).
 
-The optional Qwen2.5-0.5B GGUF is **Apache-2.0** (Alibaba Cloud). You must keep that license with any redistributed weights. Review copy: `tools/eval/licenses/`. llama.cpp has its own license; clone it from upstream.
+The optional Qwen2.5-1.5B GGUF is **Apache-2.0** (Alibaba Cloud). You must keep that license with any redistributed weights. Review copy: `tools/eval/licenses/`. llama.cpp has its own license; clone it from upstream.
 
 ## Contributing
 

@@ -1,9 +1,11 @@
 #include "LlamaBridge.h"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -122,6 +124,13 @@ std::string strip_think(std::string s) {
     s.pop_back();
   return s;
 }
+
+bool is_hunyuan_mt(std::string path) {
+  std::transform(path.begin(), path.end(), path.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  return path.find("hy-mt") != std::string::npos ||
+         path.find("hunyuan-mt") != std::string::npos;
+}
 #endif
 
 }  // namespace
@@ -158,13 +167,14 @@ extern "C" int lenstrans_llama_translate(LenstransLlamaEngine *eng,
   std::lock_guard<std::mutex> lock(eng->mu);
 
   const llama_vocab *vocab = llama_model_get_vocab(eng->model);
+  const bool hunyuan_mt = is_hunyuan_mt(eng->path);
   std::vector<llama_token> tokens(std::strlen(prompt) + 16);
   int n = llama_tokenize(vocab, prompt, static_cast<int>(std::strlen(prompt)), tokens.data(),
-                         static_cast<int>(tokens.size()), true, true);
+                         static_cast<int>(tokens.size()), !hunyuan_mt, true);
   if (n < 0) {
     tokens.resize(static_cast<std::size_t>(-n));
     n = llama_tokenize(vocab, prompt, static_cast<int>(std::strlen(prompt)), tokens.data(),
-                       static_cast<int>(tokens.size()), true, true);
+                       static_cast<int>(tokens.size()), !hunyuan_mt, true);
   }
   if (n <= 0) {
     set_err(err_buf, err_cap, "tokenize failed");
@@ -185,7 +195,20 @@ extern "C" int lenstrans_llama_translate(LenstransLlamaEngine *eng,
 
   const int max_new = max_new_tokens > 0 ? max_new_tokens : 96;
   std::string out;
-  llama_sampler *smpl = llama_sampler_init_greedy();
+  const bool formatted_hunyuan = hunyuan_mt && std::strstr(prompt, "<source>") != nullptr;
+  llama_sampler *smpl = nullptr;
+  if (hunyuan_mt) {
+    smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());
+    llama_sampler_chain_add(smpl, llama_sampler_init_penalties(
+        llama_vocab_n_tokens(vocab), 64, 1.05f, 0.0f, 0.0f));
+    llama_sampler_chain_add(smpl, llama_sampler_init_top_k(20));
+    llama_sampler_chain_add(smpl, llama_sampler_init_top_p(0.6f, 1));
+    llama_sampler_chain_add(smpl, llama_sampler_init_min_p(0.05f, 1));
+    llama_sampler_chain_add(smpl, llama_sampler_init_temp(0.7f));
+    llama_sampler_chain_add(smpl, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
+  } else {
+    smpl = llama_sampler_init_greedy();
+  }
   for (int i = 0; i < max_new; ++i) {
     const llama_token id = llama_sampler_sample(smpl, eng->ctx, -1);
     llama_sampler_accept(smpl, id);
@@ -197,6 +220,20 @@ extern "C" int lenstrans_llama_translate(LenstransLlamaEngine *eng,
     if (tok.find("<|im_end|>") != std::string::npos || tok.find("<|endoftext|>") != std::string::npos)
       break;
     out += tok;
+    if (tok.find("[end of text]") != std::string::npos) break;
+    if (formatted_hunyuan) {
+      bool complete = false;
+      for (auto target_end = out.find("</target>"); target_end != std::string::npos;
+           target_end = out.find("</target>", target_end + 9)) {
+        const auto target_start = out.rfind("<target>", target_end);
+        if (target_start != std::string::npos && out.find("<sn", target_start) < target_end) {
+          out.erase(target_end + 9);
+          complete = true;
+          break;
+        }
+      }
+      if (complete) break;
+    }
     llama_batch one = llama_batch_get_one(const_cast<llama_token *>(&id), 1);
     if (llama_decode(eng->ctx, one) != 0) break;
   }

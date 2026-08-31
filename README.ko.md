@@ -9,7 +9,7 @@
 [![UI](https://img.shields.io/badge/shell-Win32%20native-informational)](#무엇인가)
 [![Engine](https://img.shields.io/badge/local-Qwen2.5--0.5B%20GGUF-orange)](#기능)
 
-**Windows 네이티브 실시간 화면 번역기.** 아무 창 위에 레이어드·클릭 통과 박스를 그립니다. Windows Graphics Capture(WGC)로 픽셀을 잡고, 시스템 OCR로 읽고, 로컬 Qwen2.5-0.5B 또는 직접 넣은 OpenAI 호환 엔드포인트로 번역한 뒤, 몰입 채우기나 스티커로 원문을 가립니다. Electron도 Tauri도 WebView 셸도 쓰지 않습니다.
+**Windows 네이티브 실시간 화면 번역기.** 아무 창 위에 레이어드·클릭 통과 박스를 그립니다. Windows Graphics Capture(WGC)로 픽셀을 잡고, 시스템 OCR로 읽고, 로컬 Qwen2.5-1.5B 또는 직접 넣은 OpenAI 호환 엔드포인트로 번역한 뒤, 몰입 채우기나 스티커로 원문을 가립니다. Electron도 Tauri도 WebView 셸도 쓰지 않습니다.
 
 ## 무엇인가
 
@@ -47,7 +47,7 @@ Hidden → Editing → Watching ⇄ Translating
 | --- | --- | --- |
 | 위치 | 원문에서 떨어진 별도 창 | 직접 그린 픽셀에 박스가 붙음 |
 | 시점 | 핫키로 한 장 | 박스 안이 바뀌면 갱신 |
-| 오프라인 | 대개 네트워크 필요 | 기본은 로컬 Qwen2.5-0.5B |
+| 오프라인 | 대개 네트워크 필요 | 기본은 로컬 Qwen2.5-1.5B |
 | 보임새 | 원문과 번역이 함께 보임 | 몰입 채우기 또는 스티커로 원문을 **가림** |
 
 ## 기능
@@ -60,7 +60,7 @@ Hidden → Editing → Watching ⇄ Translating
 | OCR | STA 스레드의 `Windows.Media.OCR` → 공통 `OcrBlock`(텍스트, bbox, 샘플 색) |
 | 안정화 | bbox+text가 같은 연속 2프레임에 300ms 디바운스를 더한 뒤에야 번역으로 넘김 |
 | 표시 | 몰입 치환 / 스티커(기본 약 92% 불투명) / 스티커+대조. 반투명 겹쳐 쓰기는 금지 |
-| 로컬 번역 | Qwen2.5-0.5B Instruct Q4_K_M, [llama.cpp](https://github.com/ggml-org/llama.cpp) **b10688**(프로세스 내 링크 또는 `llama-cli`) |
+| 로컬 번역 | Qwen2.5-1.5B Instruct Q4_K_M, [llama.cpp](https://github.com/ggml-org/llama.cpp) **b10688**(프로세스 내 링크 또는 `llama-cli`) |
 | 클라우드 번역 | WinHTTP `POST {base}/chat/completions`. Base URL / Model / API Key **전부 공란**. 비어 있으면 비활성 |
 | 키 | DPAPI로 디스크에 저장. 설정 직렬화에 `api_key`가 나오면 안 됨(단위 테스트 있음) |
 | UI | 설정 5개 탭, 최초 3단계 안내(안내 중에는 WGC를 켜지 않음) |
@@ -140,7 +140,7 @@ powershell -File tools\pack\install-windows.ps1
 
 로컬에서 스크립트 기본 트리는 약 **4.5 MB**(zip 약 1.8 MB), 오프라인 합계 약 **496 MB**로 상한 안이었습니다. 한 대에서 나온 산출물입니다. 툴체인이 바뀌면 숫자는 변하지만 예산은 변하지 않습니다.
 
-기본 가중치: `qwen2.5-0.5b-instruct-q4_k_m.gguf`, 491400032바이트, SHA256 `74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db`. 받는 절차는 [models/README.md](models/README.md). 고른 이유는 **Apache-2.0이 EU/UK/KR을 포함한 재배포를 허용하기 때문**이지, 0.5B가 전업 기계번역 품질에 도달해서가 아닙니다.
+기본 가중치: `qwen2.5-1.5b-instruct-q4_k_m.gguf`, 1117320736바이트, SHA256 `6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e`. 받는 절차는 [models/README.md](models/README.md). 고른 이유는 **Apache-2.0이 EU/UK/KR을 포함한 재배포를 허용하기 때문**이지, 0.5B가 전업 기계번역 품질에 도달해서가 아닙니다.
 
 ## 개인정보
 
@@ -184,7 +184,7 @@ third_party/    llama.cpp b10688을 직접 clone(트리는 저장소에 넣지 �
 
 [MIT](LICENSE) © 2026 flynn (suifei).
 
-선택적 Qwen2.5-0.5B GGUF는 **Apache-2.0**(Alibaba Cloud)입니다. 가중치를 재배포할 때는 해당 라이선스를 함께 두세요. 대조 사본: `tools/eval/licenses/`. llama.cpp는 업스트림 라이선스를 따릅니다. 공식 저장소에서 clone하세요.
+선택적 Qwen2.5-1.5B GGUF는 **Apache-2.0**(Alibaba Cloud)입니다. 가중치를 재배포할 때는 해당 라이선스를 함께 두세요. 대조 사본: `tools/eval/licenses/`. llama.cpp는 업스트림 라이선스를 따릅니다. 공식 저장소에서 clone하세요.
 
 ## 기여
 

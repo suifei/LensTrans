@@ -9,7 +9,7 @@
 [![UI](https://img.shields.io/badge/shell-Win32%20native-informational)](#何をするものか)
 [![Engine](https://img.shields.io/badge/local-Qwen2.5--0.5B%20GGUF-orange)](#機能)
 
-**Windows ネイティブのリアルタイム画面翻訳。** 任意のウィンドウの上に、レイヤードでクリック透過できる枠を置きます。Windows Graphics Capture（WGC）で画素を取り込み、システムの OCR で読み、ローカルの Qwen2.5-0.5B、または自分で書いた OpenAI 互換エンドポイントで訳し、没入塗りかステッカーで原文を覆います。Electron も Tauri も WebView シェルも使いません。
+**Windows ネイティブのリアルタイム画面翻訳。** 任意のウィンドウの上に、レイヤードでクリック透過できる枠を置きます。Windows Graphics Capture（WGC）で画素を取り込み、システムの OCR で読み、ローカルの Qwen2.5-1.5B、または自分で書いた OpenAI 互換エンドポイントで訳し、没入塗りかステッカーで原文を覆います。Electron も Tauri も WebView シェルも使いません。
 
 ## 何をするものか
 
@@ -47,7 +47,7 @@ Hidden → Editing → Watching ⇄ Translating
 | --- | --- | --- |
 | 位置 | 原文から離れた別窓 | 自分で描いた画素に枠が貼り付く |
 | タイミング | ホットキーで一枚切り | 枠内が変われば更新 |
-| オフライン | ネット前提が多い | 既定はローカル Qwen2.5-0.5B |
+| オフライン | ネット前提が多い | 既定はローカル Qwen2.5-1.5B |
 | 見た目 | 原文と訳が同時に見える | 没入塗りまたはステッカーで原文を **覆う** |
 
 ## 機能
@@ -60,7 +60,7 @@ Hidden → Editing → Watching ⇄ Translating
 | OCR | `Windows.Media.OCR` を STA スレッドで実行 → 共通 `OcrBlock`（テキスト、bbox、サンプリング色） |
 | 安定化 | bbox+text が一致する連続 2 フレームに、300 ms デバウンスを足してから翻訳へ渡す |
 | 表示 | 没入置換 / ステッカー（既定は約 92% 不透明）/ ステッカー+対照。半透明の重ね書きは禁止 |
-| ローカル翻訳 | Qwen2.5-0.5B Instruct Q4_K_M、[llama.cpp](https://github.com/ggml-org/llama.cpp) **b10688**（プロセス内リンクまたは `llama-cli`） |
+| ローカル翻訳 | Qwen2.5-1.5B Instruct Q4_K_M、[llama.cpp](https://github.com/ggml-org/llama.cpp) **b10688**（プロセス内リンクまたは `llama-cli`） |
 | クラウド翻訳 | WinHTTP `POST {base}/chat/completions`。Base URL / Model / API Key は **すべて空**。空なら無効 |
 | 鍵 | DPAPI でディスクへ。設定のシリアライズに `api_key` を出さない（単体テストあり） |
 | UI | 設定 5 タブ、初回 3 ステップ案内（案内中は WGC を起こさない） |
@@ -140,7 +140,7 @@ powershell -File tools\pack\install-windows.ps1
 
 手元ではスクリプト基本ツリーが約 **4.5 MB**（zip 約 1.8 MB）、オフライン合計約 **496 MB** で、いずれも上限内でした。単機の成果物です。ツールチェーンで数字は変わりますが、予算は変わりません。
 
-既定の重み: `qwen2.5-0.5b-instruct-q4_k_m.gguf`、491400032 バイト、SHA256 `74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db`。入手手順は [models/README.md](models/README.md)。これを選んだ理由は **Apache-2.0 が EU/UK/KR を含む再配布を許す** からであって、0.5B が専任の機械翻訳に達しているからではありません。
+既定の重み: `qwen2.5-1.5b-instruct-q4_k_m.gguf`、1117320736 バイト、SHA256 `6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e`。入手手順は [models/README.md](models/README.md)。これを選んだ理由は **Apache-2.0 が EU/UK/KR を含む再配布を許す** からであって、0.5B が専任の機械翻訳に達しているからではありません。
 
 ## プライバシー
 
@@ -184,7 +184,7 @@ third_party/    llama.cpp b10688 を自分で clone（ツリーはリポジト�
 
 [MIT](LICENSE) © 2026 flynn (suifei)。
 
-任意の Qwen2.5-0.5B GGUF は **Apache-2.0**（Alibaba Cloud）です。重みを再配布するときはその許諾を添えてください。照合用コピー: `tools/eval/licenses/`。llama.cpp は上流のライセンスに従います。公式リポジトリから clone してください。
+任意の Qwen2.5-1.5B GGUF は **Apache-2.0**（Alibaba Cloud）です。重みを再配布するときはその許諾を添えてください。照合用コピー: `tools/eval/licenses/`。llama.cpp は上流のライセンスに従います。公式リポジトリから clone してください。
 
 ## 貢献
 

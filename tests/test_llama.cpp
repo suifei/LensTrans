@@ -93,7 +93,7 @@ static int RunQualitySuite(lenstrans::IEngine* eng, const char* outp, const char
   std::ofstream f(outp, std::ios::binary);
   if (f) {
     f << title << "\n\n"
-      << "- model: qwen2.5-0.5b-instruct-q4_k_m.gguf\n"
+      << "- model: qwen2.5-1.5b-instruct-q4_k_m.gguf\n"
       << "- beam: 1 (greedy)\n"
       << "- note: record output as-is. Literal or wrong translations are expected on 0.5B.\n\n"
       << "| # | kind | words | first_ms | total_ms | ws_mib | src | hyp |\n"
@@ -178,7 +178,7 @@ static int RunFlores50(lenstrans::IEngine* eng) {
   std::ofstream f(outp.c_str(), std::ios::binary);
   if (f) {
     f << "# FLORES-50 greedy EN-ZH (not W1)\n\n"
-      << "- model: qwen2.5-0.5b-instruct-q4_k_m.gguf\n"
+      << "- model: qwen2.5-1.5b-instruct-q4_k_m.gguf\n"
       << "- source: FLORES-200 dev eng_Latn / zho_Hans (first " << n << " lines)\n"
       << "- beam: 1 (greedy)\n"
       << "- note: record output as-is; not W1 acceptance; no COMET/BLEU.\n\n"
@@ -329,7 +329,7 @@ int main(int argc, char** argv) {
   std::ofstream f(outp.c_str(), std::ios::binary);
   if (f) {
     f << "# beam=2 smoke (2026-08-30, in-process llama.cpp b10688)\n\n"
-      << "- model: qwen2.5-0.5b-instruct-q4_k_m.gguf\n"
+      << "- model: qwen2.5-1.5b-instruct-q4_k_m.gguf\n"
       << "- prompt: It's on the house. → zh\n"
       << "- " << greedy << "\n"
       << "- " << beam << "\n"

@@ -118,7 +118,7 @@ bool HttpDownloadRange(const std::string& url, const std::string& part_path,
     error_out = "bad url";
     return false;
   }
-  HINTERNET session = WinHttpOpen(L"LensTrans/0.2", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+  HINTERNET session = WinHttpOpen(L"LensTrans/0.3.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                   WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
   if (!session) {
     error_out = "WinHttpOpen failed";

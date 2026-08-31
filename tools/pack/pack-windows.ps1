@@ -2,7 +2,8 @@
 param(
   [switch]$Offline,
   [string]$BuildDir = "",
-  [string]$OutRoot = ""
+  [string]$OutRoot = "",
+  [string]$ModelPath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -59,7 +60,7 @@ Compress-Archive -Path (Join-Path $BaseDir "*") -DestinationPath $zip -Force
 $zipBytes = (Get-Item $zip).Length
 
 $limitBase = 30L * 1000L * 1000L
-$limitOff = 520L * 1000L * 1000L
+$limitOff = 2200L * 1000L * 1000L
 $baseOk = $baseBytes -le $limitBase
 $zipOk = $zipBytes -le $limitBase
 
@@ -72,9 +73,12 @@ if ($Offline) {
   Get-ChildItem $OffDir -Force | Remove-Item -Recurse -Force
   New-Item -ItemType Directory -Force -Path $OffDir | Out-Null
   Copy-Item (Join-Path $BaseDir "*") $OffDir -Force
-  $gguf = Get-ChildItem (Join-Path $Root "models") -Filter *.gguf -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -like "qwen2.5-0.5b-instruct-q4_k_m.gguf" } |
-    Select-Object -First 1
+  $gguf = if ($ModelPath) { Get-Item $ModelPath -ErrorAction Stop } else { $null }
+  if (-not $gguf) {
+    $gguf = Get-ChildItem (Join-Path $Root "models") -Filter *.gguf -ErrorAction SilentlyContinue |
+      Where-Object { $_.Name -like "qwen2.5-1.5b-instruct-q4_k_m.gguf" } |
+      Select-Object -First 1
+  }
   if (-not $gguf) {
     $gguf = Get-ChildItem (Join-Path $Root "models") -Filter *.gguf -ErrorAction SilentlyContinue |
       Select-Object -First 1

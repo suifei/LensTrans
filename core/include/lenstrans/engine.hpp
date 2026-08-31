@@ -6,6 +6,8 @@
 #include "lenstrans/router.hpp"
 
 #include <cstdint>
+#include <algorithm>
+#include <cctype>
 #include <memory>
 #include <string>
 
@@ -48,6 +50,45 @@ inline std::string BuildTranslatePrompt(const TranslateRequest& req) {
          "explanation.\n\n" + req.text;
 }
 
+inline std::string WrapQwenChat(const std::string& user);
+
+inline bool IsHunyuanMtModelPath(std::string path) {
+  std::transform(path.begin(), path.end(), path.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  return path.find("hy-mt") != std::string::npos ||
+         path.find("hunyuan-mt") != std::string::npos;
+}
+
+inline std::string BuildLocalEnginePrompt(const TranslateRequest& req,
+                                          const std::string& model_path) {
+  if (!IsHunyuanMtModelPath(model_path))
+    return WrapQwenChat(BuildTranslatePrompt(req));
+  const auto target = LanguageName(req.tgt_lang);
+  if (req.batch_protocol) {
+    if (IsChineseTarget(req.tgt_lang)) {
+      return "<|startoftext|>将以下<source></source>之间的文本翻译为中文，注意只需要输出翻译后的结果，"
+             "不要额外解释，原文中的<sn></sn>标签表示标签内文本包含格式信息，需要在译文中"
+             "相应的位置尽量保留该标签。输出格式为：<target>str</target>\n\n" +
+             BuildHunyuanFormattedBatchSource(req.text) + "<|extra_0|>";
+    }
+    return "<|startoftext|>Translate the text after ID||| inside every <sn> into " + target +
+           ". Preserve all <sn> elements and IDs. Output only "
+           "<target><sn>ID|||translation</sn></target>.\n\n" +
+           BuildHunyuanFormattedBatchSource(req.text) + "<|extra_0|>";
+  }
+  if (IsChineseTarget(req.tgt_lang))
+    return "<|startoftext|>将以下文本翻译为简体中文，注意只需要输出翻译后的结果，不要额外解释：\n\n" +
+           req.text + "<|extra_0|>";
+  return "<|startoftext|>Translate the following segment into " + target +
+         ", without additional explanation.\n\n" + req.text + "<|extra_0|>";
+}
+
+inline int TranslationOutputTokenBudget(const TranslateRequest& req) {
+  if (!req.batch_protocol) return req.quality ? 128 : 96;
+  const int estimated = 256 + static_cast<int>(req.text.size() / 3);
+  return std::max(512, std::min(req.quality ? 1024 : 768, estimated));
+}
+
 inline std::string WrapQwenChat(const std::string& user) {
   return "<|im_start|>system\nYou are a multilingual translator. Detect source languages when "
          "requested, preserve meaning and idioms, and output only complete translations without "
@@ -60,6 +101,7 @@ class IEngine {
  public:
   virtual ~IEngine() = default;
   virtual bool Ready() const = 0;
+  virtual bool Preload() { return false; }
   virtual TranslateResult Translate(const TranslateRequest& req) = 0;
   // Local llama: unload weights after kLocalIdleUnloadMs with no Translate (PRD).
   virtual void NoteActivity() {}

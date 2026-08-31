@@ -30,7 +30,7 @@ else
 fi
 if [[ ${#EXTRA[@]} -eq 0 ]]; then
   # Default: include local llama when GGUF is present.
-  NAME=qwen2.5-0.5b-instruct-q4_k_m.gguf
+  NAME=qwen2.5-1.5b-instruct-q4_k_m.gguf
   if [[ -f "$HOME/Library/Application Support/LensTrans/models/$NAME" ]]; then
     EXTRA=(--e2e-llama)
   fi

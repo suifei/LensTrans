@@ -16,6 +16,7 @@
 #include <winrt/Windows.Storage.Streams.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -129,14 +130,24 @@ void SampleColorAndVariance(const BgraFrame& frame, OcrBlock& block) {
   }
 
   const int ring = 6;
-  double sr = 0, sg = 0, sb = 0, n = 0;
+  struct Bucket {
+    int count = 0;
+    int r = 0, g = 0, b = 0;
+    double luminance = 0;
+    double luminance_sq = 0;
+  };
+  std::array<Bucket, 8 * 8 * 8> buckets{};
   auto acc = [&](int x, int y) {
     if (x < 0 || y < 0 || x >= frame.w || y >= frame.h) return;
     const std::uint8_t* p = frame.bgra.data() + static_cast<std::size_t>(y) * frame.w * 4 + x * 4;
-    sr += p[2];
-    sg += p[1];
-    sb += p[0];
-    n += 1;
+    const int r = p[2], g = p[1], b = p[0];
+    const int index = (r >> 5) * 64 + (g >> 5) * 8 + (b >> 5);
+    const double luminance = static_cast<double>(r + g + b) / 3.0;
+    auto& bucket = buckets[static_cast<std::size_t>(index)];
+    ++bucket.count;
+    bucket.r += r; bucket.g += g; bucket.b += b;
+    bucket.luminance += luminance;
+    bucket.luminance_sq += luminance * luminance;
   };
   for (int y = y0 - ring; y < y1 + ring; ++y) {
     for (int x = x0 - ring; x < x1 + ring; ++x) {
@@ -144,26 +155,17 @@ void SampleColorAndVariance(const BgraFrame& frame, OcrBlock& block) {
       if (!inside) acc(x, y);
     }
   }
-  if (n < 1) return;
-  const double mr = sr / n, mg = sg / n, mb = sb / n;
-  block.background.r = static_cast<std::uint8_t>(std::clamp(mr, 0.0, 255.0));
-  block.background.g = static_cast<std::uint8_t>(std::clamp(mg, 0.0, 255.0));
-  block.background.b = static_cast<std::uint8_t>(std::clamp(mb, 0.0, 255.0));
-  double vr = 0, vg = 0, vb = 0;
-  auto var = [&](int x, int y) {
-    if (x < 0 || y < 0 || x >= frame.w || y >= frame.h) return;
-    const std::uint8_t* p = frame.bgra.data() + static_cast<std::size_t>(y) * frame.w * 4 + x * 4;
-    vr += (p[2] - mr) * (p[2] - mr);
-    vg += (p[1] - mg) * (p[1] - mg);
-    vb += (p[0] - mb) * (p[0] - mb);
-  };
-  for (int y = y0 - ring; y < y1 + ring; ++y) {
-    for (int x = x0 - ring; x < x1 + ring; ++x) {
-      const bool inside = x >= x0 && x < x1 && y >= y0 && y < y1;
-      if (!inside) var(x, y);
-    }
-  }
-  block.bg_variance = static_cast<float>(std::sqrt((vr + vg + vb) / (3.0 * n)));
+  const auto best = std::max_element(buckets.begin(), buckets.end(),
+                                     [](const Bucket& a, const Bucket& b) {
+                                       return a.count < b.count;
+                                     });
+  if (best == buckets.end() || best->count == 0) return;
+  block.background.r = static_cast<std::uint8_t>(best->r / best->count);
+  block.background.g = static_cast<std::uint8_t>(best->g / best->count);
+  block.background.b = static_cast<std::uint8_t>(best->b / best->count);
+  const double mean = best->luminance / best->count;
+  block.bg_variance = static_cast<float>(
+      std::sqrt(std::max(0.0, best->luminance_sq / best->count - mean * mean)));
 }
 
 std::vector<OcrBlock> RecognizeOcr(const BgraFrame& frame, const std::vector<OcrRoi>& rois,
@@ -202,6 +204,10 @@ std::vector<OcrBlock> RecognizeOcr(const BgraFrame& frame, const std::vector<Ocr
             miny = std::min(miny, static_cast<float>(r.Y));
             maxx = std::max(maxx, static_cast<float>(r.X + r.Width));
             maxy = std::max(maxy, static_cast<float>(r.Y + r.Height));
+            block.mask_boxes.push_back({static_cast<float>(r.X + crop.left),
+                                        static_cast<float>(r.Y + crop.top),
+                                        static_cast<float>(r.Width),
+                                        static_cast<float>(r.Height)});
           }
           if (maxx < minx) continue;
           block.bbox.x = minx + static_cast<float>(crop.left);

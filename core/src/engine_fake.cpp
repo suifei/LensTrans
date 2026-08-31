@@ -14,6 +14,7 @@ class FakeEngine final : public IEngine {
         fail_times_(fail_times) {}
 
   bool Ready() const override { return ready_; }
+  bool Preload() override { return ready_; }
 
   TranslateResult Translate(const TranslateRequest&) override {
     TranslateResult r;

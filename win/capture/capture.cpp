@@ -8,6 +8,7 @@
 
 #include <unknwn.h>
 #include <d3d11.h>
+#include <dwmapi.h>
 #include <dxgi1_2.h>
 #include <windows.graphics.capture.interop.h>
 #include <windows.graphics.directx.direct3d11.interop.h>
@@ -64,7 +65,7 @@ winrt::com_ptr<ID3D11Texture2D> TextureFromSurface(
 
 bool ExcludeOverlayFromCapture(HWND overlay) {
   if (!overlay) return false;
-  return SetWindowDisplayAffinity(overlay, WDA_EXCLUDEFROMCAPTURE) != FALSE;
+  return SetWindowDisplayAffinity(overlay, WDA_NONE) != FALSE;
 }
 
 struct RegionCapture::Impl {
@@ -242,13 +243,15 @@ bool RegionCapture::Start(HWND overlay, RECT screen_phys, HWND wgc_target) {
         impl_->device, DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, sz);
     impl_->session = impl_->pool.CreateCaptureSession(impl_->item);
     impl_->session.IsCursorCaptureEnabled(false);
-    // Keep the affinity exclusion in place for both capture modes. The monitor
-    // exclusion-list API is a second line of defense on newer Windows builds.
-    if (overlay_) ExcludeOverlayFromCapture(overlay_);
-    impl_->session.StartCapture();
     if (!impl_->capture_window && overlay_) {
-      ApplyMonitorOverlayExclusion(impl_->session, overlay_);
+      if (!ApplyMonitorOverlayExclusion(impl_->session, overlay_)) {
+        err_ = "WGC monitor overlay exclusion unavailable; using non-recursive fallback";
+        delete impl_;
+        impl_ = nullptr;
+        return false;
+      }
     }
+    impl_->session.StartCapture();
   } catch (const winrt::hresult_error& e) {
     char hr[16];
     std::snprintf(hr, sizeof(hr), "0x%08X", static_cast<unsigned>(e.code()));
@@ -385,7 +388,13 @@ bool RegionCapture::GrabBitBlt(BgraFrame& out) {
     return false;
   }
   HGDIOBJ old = SelectObject(mem, dib);
+  const bool restore_overlay = overlay_ && IsWindowVisible(overlay_);
+  if (restore_overlay) {
+    ShowWindow(overlay_, SW_HIDE);
+    DwmFlush();
+  }
   const BOOL ok = BitBlt(mem, 0, 0, w, h, screen, rect_.left, rect_.top, SRCCOPY);
+  if (restore_overlay) ShowWindow(overlay_, SW_SHOWNOACTIVATE);
   if (ok && bits) {
     out.w = w;
     out.h = h;

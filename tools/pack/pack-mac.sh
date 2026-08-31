@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Pack LensTrans macOS release into LensTrans.app.
 #
-# Default (bundled model): dist/macos/LensTrans.app — includes Resources/models/*.gguf (≤ 520 MB).
+# Default (bundled model): dist/macos/LensTrans.app — includes one selected GGUF (≤ 2.2 GB).
 # Slim base (no GGUF):     bash tools/pack/pack-mac.sh --base → dist/macos-base/ (≤ ~30 MB intent).
 #
 # GGUF is NEVER committed to git; copied at pack time from models/ or Application Support.
@@ -16,10 +16,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-NAME=qwen2.5-0.5b-instruct-q4_k_m.gguf
-EXPECTED_BYTES=491400032
+NAME=qwen2.5-1.5b-instruct-q4_k_m.gguf
+EXPECTED_BYTES=1117320736
 LIMIT_BASE=30000000
-LIMIT_OFF=520000000
+LIMIT_OFF=2200000000
 SKIP_BUILD=0
 DO_SIGN=0
 DO_ZIP=1
@@ -81,20 +81,27 @@ if find "$ROOT/mac" -name '*.gguf' 2>/dev/null | grep -q .; then
   exit 1
 fi
 
-GGUF_SRC=""
+GGUF_SRC="${LENSTRANS_GGUF_PATH:-}"
 if [[ "$BUNDLE_GGUF" -eq 1 ]]; then
-  for c in \
-    "$ROOT/models/$NAME" \
-    "$HOME/Library/Application Support/LensTrans/models/$NAME"; do
-    if [[ -f "$c" ]]; then GGUF_SRC="$c"; break; fi
-  done
+  if [[ -n "$GGUF_SRC" && ! -f "$GGUF_SRC" ]]; then
+    echo "LENSTRANS_GGUF_PATH is not a file: $GGUF_SRC" >&2
+    exit 1
+  fi
+  if [[ -z "$GGUF_SRC" ]]; then
+    for c in \
+      "$ROOT/models/$NAME" \
+      "$HOME/Library/Application Support/LensTrans/models/$NAME"; do
+      if [[ -f "$c" ]]; then GGUF_SRC="$c"; break; fi
+    done
+  fi
   if [[ -z "$GGUF_SRC" ]]; then
     echo "bundled pack needs $NAME — run: bash tools/fetch/fetch-gguf.sh" >&2
     echo "(or place file under models/; GGUF is gitignored, not committed)" >&2
     exit 1
   fi
+  NAME=$(basename "$GGUF_SRC")
   SZ=$(stat -f%z "$GGUF_SRC")
-  if [[ "$SZ" != "$EXPECTED_BYTES" ]]; then
+  if [[ "$NAME" == "qwen2.5-1.5b-instruct-q4_k_m.gguf" && "$SZ" != "$EXPECTED_BYTES" ]]; then
     echo "GGUF size $SZ != $EXPECTED_BYTES" >&2
     exit 1
   fi
@@ -165,7 +172,7 @@ stage_app() {
     cp -f "$GGUF_SRC" "$dest_app/Contents/Resources/models/$NAME"
     if [[ -f "$ROOT/tools/eval/licenses/Qwen2.5-0.5B-Instruct-LICENSE.txt" ]]; then
       cp -f "$ROOT/tools/eval/licenses/Qwen2.5-0.5B-Instruct-LICENSE.txt" \
-        "$dest_app/Contents/Resources/models/"
+        "$dest_app/Contents/Resources/models/Qwen2.5-Instruct-LICENSE.txt"
     fi
   fi
 
@@ -223,10 +230,10 @@ fi
 
 if [[ "$BUNDLE_GGUF" -eq 1 ]]; then
   if [[ "$APP_BYTES" -gt "$LIMIT_OFF" ]]; then
-    echo "offline/bundled pack $APP_BYTES exceeds 520e6" >&2
+    echo "offline/bundled pack $APP_BYTES exceeds 2.2GB" >&2
     exit 1
   fi
-  echo "bundled GGUF limit 520MB: PASS ($APP_BYTES)"
+  echo "bundled GGUF limit 2.2GB: PASS ($APP_BYTES)"
   if [[ ! -f "$APP/Contents/Resources/models/$NAME" ]]; then
     echo "missing bundled model in Resources/models/" >&2
     exit 1
